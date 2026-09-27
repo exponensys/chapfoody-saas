@@ -185,13 +185,33 @@ model Business {
   customerConsents  CustomerConsent[]
 
   // ── Storefront ─────────────────────────────────────────────────────────────
-  websiteConfig     WebsiteConfig?
-  websiteTheme      WebsiteTheme?
-  websitePages      WebsitePage[]
-  websiteNavigation WebsiteNavigation[]
-  websiteDomains    WebsiteDomain[]
-  websiteAssets     WebsiteAsset[]
-  checkoutSetting   CheckoutSetting?
+  websiteConfig       WebsiteConfig?
+  websiteTheme        WebsiteTheme?
+  websitePages        WebsitePage[]
+  websiteNavigation   WebsiteNavigation[]
+  websiteDomains      WebsiteDomain[]
+  websiteAssets       WebsiteAsset[]
+  checkoutSetting     CheckoutSetting?
+  // ── Marketing ──────────────────────────────────────────────────────────────
+  customerSegments    CustomerSegment[]
+  audiences           Audience[]
+  audienceMembers     AudienceMember[]
+  campaignTemplates   CampaignTemplate[]
+  emailTemplates      EmailTemplate[]
+  campaigns           Campaign[]
+  smsCampaigns        SmsCampaign[]
+  loyaltyProgram      LoyaltyProgram?
+  loyaltyTiers        LoyaltyTier[]
+  loyaltyTransactions LoyaltyTransaction[]
+  rewardRules         RewardRule[]
+  automationTriggers  AutomationTrigger[]
+
+  // ── Integrations ───────────────────────────────────────────────────────────
+  integrations        Integration[]
+  integrationMappings IntegrationMapping[]
+  webhookEndpoints    WebhookEndpoint[]
+  webhookDeliveries   WebhookDelivery[]
+  jobRuns             JobRun[]
 
   @@index([businessTypeId])
   @@index([ownerId])

@@ -82,6 +82,10 @@ model Customer {
   /// Referrals that produced this customer — usually one, occasionally more.
   referrals Referral[]
 
+  // Marketing: which audiences they are in, and every movement of their points.
+  audienceMemberships AudienceMember[]
+  loyaltyTransactions LoyaltyTransaction[]
+
   @@unique([businessId, number])
   /// One account per business per user: the same person can be a customer of ten businesses.
   @@unique([businessId, userId])

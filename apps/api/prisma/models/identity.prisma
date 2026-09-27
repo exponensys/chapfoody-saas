@@ -122,6 +122,15 @@ model User {
   mediaUploaded     Media[]       @relation("MediaUploader")
   seoMetasUpdated   SeoMeta[]     @relation("SeoMetaAuthor")
 
+  // Marketing and integrations: who built a segment, approved a send, adjusted points, connected a
+  // provider. Every one of these is a "who did that?" question waiting to be asked.
+  segmentsCreated       CustomerSegment[]    @relation("SegmentAuthor")
+  emailTemplatesUpdated EmailTemplate[]      @relation("EmailTemplateAuthor")
+  campaignsCreated      Campaign[]           @relation("CampaignAuthor")
+  campaignsApproved     Campaign[]           @relation("CampaignApprover")
+  loyaltyOps            LoyaltyTransaction[] @relation("LoyaltyAuthor")
+  integrationsConnected Integration[]        @relation("IntegrationConnector")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

@@ -1,0 +1,226 @@
+// Integrations — the boundary between this system and everyone else's.
+//
+// ── The most dangerous column in the schema lives here ───────────────────────
+// `Integration.credentials` holds OAuth tokens, refresh tokens and API keys for third-party systems.
+// It is JSON, and it MUST be encrypted at the application layer before it is written. The database
+// cannot do that for us: it cannot know our key, and it cannot tell a token from a preference. A
+// plaintext token in a backup, in a replica, or in a `select *` during an incident is a plaintext token
+// for as long as those copies live. The column is named `credentials` rather than `tokens` because
+// Zoho, Stripe and a generic webhook do not agree on what to call the things they hand out.
+//
+// ── Webhook deliveries are a LOG, and the queue is the table ─────────────────
+// `WebhookDelivery` is not a side-note: it is the retry queue. A row is created PENDING when an event
+// fires, the worker picks it up by `scheduledAt`, and the attempt, the outcome and the response are
+// written back. Keeping the attempts as a row rather than as a counter is what makes "it worked on the
+// third try, and here is what the first two said" answerable.
+//
+// ── Every table here is tenant-scoped ────────────────────────────────────────
+// No platform-level rows: an integration belongs to the business that configured it, its tokens are
+// that business's, and a shared integration would mean one tenant's credentials serving another's
+// data. `cf_apply_tenant_rls()` covers all of them without exception.
+
+/// A connection to a third-party system.
+model Integration {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  provider IntegrationProvider
+  status   IntegrationStatus   @default(DISCONNECTED)
+
+  name String? @db.VarChar(160)
+
+  /// ENCRYPTED AT THE APPLICATION LAYER. Tokens, refresh tokens, API keys, webhook secrets, per
+  /// provider. Never written or read as plaintext by anything but the crypto module.
+  credentials Json?
+
+  /// What the connection was granted. Stored because re-consenting after a failure means asking for
+  /// exactly these again, and because an integration holding more scopes than it uses is a finding.
+  scopes String[] @default([])
+
+  /// The account on the other side, as the provider names it: a Zoho organisation id, a Stripe
+  /// account id. What an operator needs to confirm the right account was connected.
+  externalAccountId   String? @map("external_account_id") @db.VarChar(200)
+  externalAccountName String? @map("external_account_name") @db.VarChar(200)
+
+  /// Non-secret configuration: which calendar, which list, which folder.
+  settings Json?
+
+  connectedById String?   @map("connected_by_id")
+  connectedAt   DateTime? @map("connected_at")
+
+  lastSyncAt DateTime? @map("last_sync_at")
+
+  /// The last failure, kept rather than logged away: an operator looking at a broken integration needs
+  /// to see why without a log search, and "ERROR" alone is not a diagnosis.
+  lastError   String?   @map("last_error") @db.Text
+  lastErrorAt DateTime? @map("last_error_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business    Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  connectedBy User?                @relation("IntegrationConnector", fields: [connectedById], references: [id], onDelete: SetNull)
+  mappings    IntegrationMapping[]
+
+  /// One connection per provider per tenant. Two Zoho connections would mean two sources of truth for
+  /// every synced record, and no way to say which one won.
+  @@unique([businessId, provider])
+  @@index([businessId, status])
+  @@map("integration")
+}
+
+/// How one of our records maps onto one of theirs.
+model IntegrationMapping {
+  id            String @id @default(cuid())
+  businessId    String @map("business_id")
+  integrationId String @map("integration_id")
+
+  entity    IntegrationEntity
+  direction SyncDirection
+
+  /// The object on the other side: a Zoho module, a Stripe object type, a webhook event name.
+  externalObject String? @map("external_object") @db.VarChar(160)
+  /// Field-by-field correspondence. JSON because every provider names its fields differently and the
+  /// set changes when they do.
+  mapping        Json
+
+  isActive Boolean @default(true) @map("is_active")
+
+  lastSyncAt DateTime? @map("last_sync_at")
+  lastError  String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business    Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  integration Integration @relation(fields: [integrationId], references: [id], onDelete: Cascade)
+
+  @@unique([integrationId, entity])
+  @@index([businessId, isActive])
+  @@map("integration_mapping")
+}
+
+/// Where we send events: an HTTPS endpoint the tenant owns.
+model WebhookEndpoint {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  url         String  @db.VarChar(500)
+  description String? @db.VarChar(300)
+
+  /// The signing secret, HASHED. We never need to read it back — the receiver verifies our signature
+  /// with their copy — so storing it in a form we could read would be storing a liability for nothing.
+  secret String @db.VarChar(128)
+
+  /// The event names this endpoint subscribed to. An array because a subscription is a small closed
+  /// set compared against on every emit, and a join table would be three tables deep for a string.
+  events String[] @default([])
+
+  isActive Boolean @default(true) @map("is_active")
+
+  lastTriggeredAt DateTime? @map("last_triggered_at")
+  /// Consecutive failures. Reset on success, so it counts a streak rather than a lifetime.
+  failureCount    Int       @default(0) @map("failure_count")
+  /// Set when we stopped sending. Kept apart from `isActive`: one is a decision, the other is a
+  /// consequence, and un-disabling an endpoint should not have to guess which happened.
+  disabledAt      DateTime? @map("disabled_at")
+  disabledReason  String?   @map("disabled_reason") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  deliveries WebhookDelivery[]
+
+  @@index([businessId, isActive])
+  @@map("webhook_endpoint")
+}
+
+/// One attempt to deliver one event. The row IS the queue entry.
+///
+/// A delivery is created PENDING when an event fires and is claimed by the worker through
+/// `scheduledAt`. Everything about the attempt is written back onto the same row: the status code, the
+/// response body, how long it took, and the error when there was one. That is what makes "it worked on
+/// the third try, and the first two said 503" answerable instead of a guess.
+model WebhookDelivery {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  endpointId String @map("endpoint_id")
+
+  event String @db.VarChar(120)
+
+  /// The body we sent, stored verbatim. A payload assembled at send time and not kept cannot be
+  /// replayed, and replaying is the first thing anyone wants after an outage.
+  payload Json
+
+  status WebhookDeliveryStatus @default(PENDING)
+
+  attempts Int @default(0)
+
+  responseStatus Int?    @map("response_status")
+  /// Truncated by the application where a receiver answers with an HTML error page: the first kilobyte
+  /// is diagnostic and the rest is not worth storing per delivery.
+  responseBody   String? @map("response_body") @db.Text
+  /// The network-level failure, when the request never got an answer at all. Distinct from a non-2xx
+  /// response: one means they refused it, the other means we never reached them.
+  error          String? @db.Text
+  durationMs     Int?    @map("duration_ms")
+
+  /// When the worker should try it. Set on creation, pushed forward by the retry policy on failure.
+  scheduledAt DateTime  @default(now()) @map("scheduled_at")
+  deliveredAt DateTime? @map("delivered_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+
+  /// The worker's own query: pending deliveries that are due, oldest first.
+  @@index([status, scheduledAt])
+  @@index([endpointId, createdAt])
+  @@map("webhook_delivery")
+}
+
+/// A background job's history.
+///
+/// `businessId` is NULLABLE, and that is the one thing that makes this table different: most jobs
+/// belong to a tenant (a nightly report, a segment re-evaluation), and some belong to the platform
+/// (sending the content publication queue on its way). A row with no tenant is therefore not an
+/// oversight, and the tenant policy below treats it as visible to nobody but the worker.
+model JobRun {
+  id         String  @id @default(cuid())
+  businessId String? @map("business_id")
+
+  jobName String  @db.VarChar(200)
+  queue   String? @db.VarChar(80)
+
+  status JobStatus @default(QUEUED)
+
+  /// What was passed in, so a failure can be reproduced. JSON because every job takes a different
+  /// shape, and a re-run needs the input rather than a description of it.
+  payload Json?
+
+  attempts Int     @default(1)
+  /// The id of the worker that ran it. The first question about a job that hung is which process
+  /// was holding it.
+  workerId String? @map("worker_id") @db.VarChar(120)
+
+  startedAt  DateTime  @default(now()) @map("started_at")
+  finishedAt DateTime? @map("finished_at")
+  /// Stored rather than computed from the timestamps: a job resumed after a restart has a start time
+  /// that predates the work it actually did.
+  durationMs Int?      @map("duration_ms")
+
+  error  String? @db.Text
+  result Json?
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business Business? @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([jobName, startedAt])
+  @@index([status, startedAt])
+  @@index([businessId, startedAt])
+  @@map("job_run")
+}

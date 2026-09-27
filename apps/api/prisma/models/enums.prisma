@@ -830,3 +830,152 @@ enum MediaKind {
 
   @@map("media_kind")
 }
+
+// ── Marketing ────────────────────────────────────────────────────────────────
+
+/// How a segment is built. A STATIC segment is a list someone curated; a DYNAMIC one is a rule the
+/// database re-evaluates. Keeping them apart matters because a static list stops being true the moment
+/// it is saved, and a report that does not say which it is will be read as the other one.
+enum SegmentType {
+  STATIC
+  DYNAMIC
+
+  @@map("segment_type")
+}
+
+/// Which channel a campaign goes out on. MULTI is a campaign that runs on more than one, and is not
+/// the same as running two campaigns: the audience and the schedule are shared.
+enum CampaignChannel {
+  EMAIL
+  SMS
+  PUSH
+  MULTI
+
+  @@map("campaign_channel")
+}
+
+enum CampaignStatus {
+  DRAFT
+  SCHEDULED
+  RUNNING
+  PAUSED
+  COMPLETED
+  /// Stopped by a person, deliberately. Distinct from COMPLETED: one ran its course, the other did not.
+  CANCELED
+
+  @@map("campaign_status")
+}
+
+/// Every way a loyalty balance can change. Signed points, so the ledger sums to the balance rather
+/// than relying on a convention about which types subtract.
+enum LoyaltyTransactionType {
+  EARN
+  REDEEM
+  /// Points past their expiry date. A real cause of balance changes that surprises people, and the
+  /// reason the ledger has to record it rather than quietly adjusting the total.
+  EXPIRE
+  ADJUSTMENT
+  REFERRAL_BONUS
+
+  @@map("loyalty_transaction_type")
+}
+
+enum RewardType {
+  DISCOUNT
+  FREE_ITEM
+  FREE_DELIVERY
+  UPGRADE
+
+  @@map("reward_type")
+}
+
+/// What starts an automation. The event is the trigger; the conditions narrow it.
+enum AutomationEvent {
+  CUSTOMER_CREATED
+  ORDER_COMPLETED
+  BIRTHDAY
+  INACTIVE_DAYS
+  LOYALTY_TIER_REACHED
+  SEGMENT_ENTERED
+
+  @@map("automation_event")
+}
+
+enum AutomationAction {
+  SEND_EMAIL
+  SEND_SMS
+  ADD_TAG
+  ADD_POINTS
+  NOTIFY_STAFF
+
+  @@map("automation_action")
+}
+
+// ── Integrations ─────────────────────────────────────────────────────────────
+
+/// The third-party systems the plan names, plus an escape hatch. An enum rather than a table because
+/// each provider needs code — a credentials shape, a mapper — and a row cannot conjure that.
+enum IntegrationProvider {
+  ZOHO
+  ZAPIER
+  MAKE
+  GOOGLE_CALENDAR
+  STRIPE
+  CINETPAY
+  PAYSTACK
+  FLUTTERWAVE
+  CUSTOM
+
+  @@map("integration_provider")
+}
+
+enum IntegrationStatus {
+  DISCONNECTED
+  CONNECTED
+  /// Connected once, and the last attempt failed. Kept apart from DISCONNECTED because the fix is
+  /// different: one needs setting up, the other needs a look at what broke.
+  ERROR
+
+  @@map("integration_status")
+}
+
+/// Which of our records a mapping is about. A closed set, because a mapper has to exist per entity.
+enum IntegrationEntity {
+  ORDER
+  CUSTOMER
+  PRODUCT
+  INVOICE
+  PAYMENT
+  STOCK_MOVEMENT
+
+  @@map("integration_entity")
+}
+
+enum SyncDirection {
+  PUSH
+  PULL
+  BIDIRECTIONAL
+
+  @@map("sync_direction")
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  /// Gave up. A delivery that failed more times than the retry policy allows, and was stopped on
+  /// purpose rather than left failing forever.
+  DISCARDED
+
+  @@map("webhook_delivery_status")
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+
+  @@map("job_status")
+}

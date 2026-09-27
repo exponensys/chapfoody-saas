@@ -54,6 +54,7 @@ import { seedAffiliate } from './seed/affiliate.js';
 import { reconcileCustomerTotals, seedCustomers } from './seed/customers.js';
 import { seedStorefront, seedThemePresets } from './seed/storefront.js';
 import { seedContent, type ContentCounters } from './seed/content.js';
+import { seedMarketing } from './seed/marketing.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -266,6 +267,23 @@ interface SeedTally {
   websiteDomains: number;
   websiteAssets: number;
   checkoutSettings: number;
+  loyaltyPrograms: number;
+  loyaltyTiers: number;
+  loyaltyTransactions: number;
+  rewardRules: number;
+  segments: number;
+  audiences: number;
+  audienceMembers: number;
+  campaignTemplates: number;
+  emailTemplates: number;
+  campaigns: number;
+  smsCampaigns: number;
+  automations: number;
+  integrations: number;
+  integrationMappings: number;
+  webhookEndpoints: number;
+  webhookDeliveries: number;
+  jobRuns: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -319,6 +337,23 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     websiteDomains: 0,
     websiteAssets: 0,
     checkoutSettings: 0,
+    loyaltyPrograms: 0,
+    loyaltyTiers: 0,
+    loyaltyTransactions: 0,
+    rewardRules: 0,
+    segments: 0,
+    audiences: 0,
+    audienceMembers: 0,
+    campaignTemplates: 0,
+    emailTemplates: 0,
+    campaigns: 0,
+    smsCampaigns: 0,
+    automations: 0,
+    integrations: 0,
+    integrationMappings: 0,
+    webhookEndpoints: 0,
+    webhookDeliveries: 0,
+    jobRuns: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -487,6 +522,29 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.websiteDomains += storefront.domains;
         tally.websiteAssets += storefront.assets;
         tally.checkoutSettings += storefront.checkouts;
+
+        // ── Marketing and integrations ─────────────────────────────────────────
+        // After the customers, because the points ledger and the audience both point at one of them —
+        // and the balance is reconciled FROM the ledger rather than invented, the same discipline the
+        // customer counters get at the end of the run.
+        const marketing = await seedMarketing(tx, tenant.id, user.id);
+        tally.loyaltyPrograms += marketing.loyaltyPrograms;
+        tally.loyaltyTiers += marketing.loyaltyTiers;
+        tally.loyaltyTransactions += marketing.loyaltyTransactions;
+        tally.rewardRules += marketing.rewardRules;
+        tally.segments += marketing.segments;
+        tally.audiences += marketing.audiences;
+        tally.audienceMembers += marketing.audienceMembers;
+        tally.campaignTemplates += marketing.campaignTemplates;
+        tally.emailTemplates += marketing.emailTemplates;
+        tally.campaigns += marketing.campaigns;
+        tally.smsCampaigns += marketing.smsCampaigns;
+        tally.automations += marketing.automations;
+        tally.integrations += marketing.integrations;
+        tally.integrationMappings += marketing.integrationMappings;
+        tally.webhookEndpoints += marketing.webhookEndpoints;
+        tally.webhookDeliveries += marketing.webhookDeliveries;
+        tally.jobRuns += marketing.jobRuns;
 
         // ── Order types, front of house and a couple of orders ─────────────────
         // Order types come first: an order cannot be created without one, and the two orders
@@ -746,6 +804,13 @@ async function main(): Promise<void> {
         `${content.posts} articles, ${content.collections} collections, ${content.videos} vidéos, ` +
         `${content.caseStudies} études de cas, ${content.useCases} cas d'usage, ` +
         `${content.media} médias, ${content.pages} pages, ${content.seoMetas} règles SEO\n` +
+        `  marketing : ${tally.loyaltyPrograms} programmes fidélité, ${tally.loyaltyTiers} paliers, ` +
+        `${tally.loyaltyTransactions} mouvements, ${tally.rewardRules} récompenses, ` +
+        `${tally.segments} segments, ${tally.audiences} audiences (${tally.audienceMembers} membres), ` +
+        `${tally.campaignTemplates} modèles, ${tally.emailTemplates} e-mails, ` +
+        `${tally.campaigns} campagnes, ${tally.smsCampaigns} SMS, ${tally.automations} automatisations\n` +
+        `  intégr.   : ${tally.integrations} intégrations (${tally.integrationMappings} mappings), ` +
+        `${tally.webhookEndpoints} webhooks (${tally.webhookDeliveries} envois), ${tally.jobRuns} jobs\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

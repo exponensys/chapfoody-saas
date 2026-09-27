@@ -1,0 +1,469 @@
+// Marketing and integrations — the last domain group.
+//
+// ── One decision runs through the whole marketing half ───────────────────────
+// A CAMPAIGN TARGETS AN AUDIENCE, and an audience is a list of customer ids resolved once and stored,
+// not a query re-run at send time. That is the difference between "these 412 people received this
+// message" and "these people matched a filter at some point". The first is auditable and can be
+// re-checked; the second cannot be reconstructed after the fact, which is exactly when someone asks.
+// A `CustomerSegment` is the rule; an `Audience` is the frozen result of applying it.
+//
+// ── Loyalty is a LEDGER, like stock and consent ──────────────────────────────
+// `LoyaltyTransaction` is append-only, and the balance it explains is denormalised onto `Customer` as
+// `loyaltyPoints`. Points expire, get corrected and get given away, and "why do I only have 40 points?"
+// is a question a balance alone can never answer.
+//
+// ── Integrations hold the most dangerous column in the schema ────────────────
+// `Integration.credentials` holds OAuth tokens and API keys for third-party systems. It is JSON, and it
+// is ENCRYPTED AT THE APPLICATION LAYER before it is written — the database cannot do that for us, and
+// a plaintext token in a backup is a plaintext token forever. The column is named `credentials` rather
+// than `tokens` because Zoho, Stripe and a generic webhook do not agree on what to call them.
+
+/// A rule describing a group of customers, or a list someone curated.
+model CustomerSegment {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+  /// Stable code for the API and the seed: 'vip', 'dormants', 'nouveaux'.
+  code        String? @db.VarChar(48)
+
+  type SegmentType @default(DYNAMIC)
+
+  /// The DYNAMIC rule: a filter tree the query builder produces and the evaluator consumes. JSON
+  /// because the set of filterable fields grows with the product, and a column per filter would be a
+  /// migration per filter.
+  rules Json?
+
+  /// How many customers were in it at the last evaluation. Denormalised and DATED, because a count
+  /// without a timestamp invites someone to read a stale number as the current one.
+  memberCount     Int       @default(0) @map("member_count")
+  lastEvaluatedAt DateTime? @map("last_evaluated_at")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy User?      @relation("SegmentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  audiences Audience[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("customer_segment")
+}
+
+/// A frozen list of customers that a campaign was, is, or will be sent to.
+///
+/// The members are rows, not a query. See the note at the top of this file: what was sent is a fact,
+/// and a fact has to be stored rather than derived.
+model Audience {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// The segment this was resolved from, when it was. Null for a hand-built or imported list.
+  segmentId String? @map("segment_id")
+
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+
+  /// Resolved once, when the audience was built — NOT at send time.
+  memberCount    Int       @default(0) @map("member_count")
+  lastResolvedAt DateTime? @map("last_resolved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  segment   CustomerSegment? @relation(fields: [segmentId], references: [id], onDelete: SetNull)
+  members   AudienceMember[]
+  campaigns Campaign[]
+
+  @@unique([businessId, name])
+  @@map("audience")
+}
+
+/// One customer in one audience.
+///
+/// `excludedAt` rather than deletion: a customer who asked not to be contacted is a fact about the
+/// campaign, and deleting the row would make the send count unexplainable.
+model AudienceMember {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  audienceId String @map("audience_id")
+  customerId String @map("customer_id")
+
+  /// When the customer joined, which is usually when the audience was resolved.
+  addedAt       DateTime  @default(now()) @map("added_at")
+  excludedAt    DateTime? @map("excluded_at")
+  excludeReason String?   @map("exclude_reason") @db.VarChar(200)
+
+  audience Audience @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  business Business @relation(fields: [businessId], references: [id])
+
+  @@unique([audienceId, customerId])
+  @@index([customerId])
+  @@map("audience_member")
+}
+
+/// A reusable message skeleton: the thing an editor writes once and sends forty times.
+model CampaignTemplate {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name    String          @db.VarChar(160)
+  channel CampaignChannel
+
+  subject   String? @db.VarChar(200)
+  /// Markdown or HTML with placeholders: {{prenom}}, {{points}}.
+  body      String  @db.Text
+  /// The placeholders this template expects, so the editor can be told when one is missing rather than
+  /// sending an e-mail that says "Bonjour {{prenom}}".
+  variables Json?
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaigns Campaign[]
+
+  @@unique([businessId, name])
+  @@map("campaign_template")
+}
+
+/// A transactional or drip e-mail: the ones the system sends rather than a person.
+///
+/// Keyed rather than named, because code looks them up: `welcome`, `order_confirmation`,
+/// `loyalty_tier_reached`. A tenant renaming a template must not break the send.
+model EmailTemplate {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  key     String @db.VarChar(64)
+  name    String @db.VarChar(160)
+  subject String @db.VarChar(200)
+  body    String @db.Text
+
+  /// Whether the business has customised it. An untouched template follows the platform default, and
+  /// saying so explicitly is what lets "reset to default" be offered honestly.
+  isCustom Boolean @default(false) @map("is_custom")
+  isActive Boolean @default(true) @map("is_active")
+
+  updatedById String? @map("updated_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy User?    @relation("EmailTemplateAuthor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  automations AutomationTrigger[]
+
+  @@unique([businessId, key])
+  @@map("email_template")
+}
+
+/// A message sent to an audience.
+///
+/// The counters are denormalised from the send, for the reason every counter is: a campaign list must
+/// not aggregate the delivery log to draw a row. `recipientCount` is copied from the audience AT SEND
+/// TIME — a number that changed when the audience was edited later would make every rate computed from
+/// it wrong.
+model Campaign {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  audienceId String? @map("audience_id")
+  templateId String? @map("template_id")
+
+  name    String          @db.VarChar(200)
+  channel CampaignChannel
+  status  CampaignStatus  @default(DRAFT)
+
+  subject String? @db.VarChar(200)
+  /// The message as it was sent. Copied rather than referenced: editing a template must not rewrite
+  /// what a campaign already delivered.
+  body    String? @db.Text
+
+  scheduledFor DateTime? @map("scheduled_for")
+  startedAt    DateTime? @map("started_at")
+  completedAt  DateTime? @map("completed_at")
+
+  /// How many were targeted when the send began.
+  recipientCount Int @default(0) @map("recipient_count")
+  sentCount      Int @default(0) @map("sent_count")
+  deliveredCount Int @default(0) @map("delivered_count")
+  openedCount    Int @default(0) @map("opened_count")
+  clickedCount   Int @default(0) @map("clicked_count")
+  failedCount    Int @default(0) @map("failed_count")
+  /// Unsubscribes attributed to this campaign. A campaign that earns more than it loses is the only
+  /// kind worth repeating, and this is the half usually not measured.
+  optOutCount    Int @default(0) @map("opt_out_count")
+
+  budgetAmount Decimal? @map("budget_amount") @db.Decimal(14, 2)
+  spentAmount  Decimal  @default(0) @map("spent_amount") @db.Decimal(14, 2)
+  currency     String   @default("EUR") @db.Char(3)
+
+  createdById  String?   @map("created_by_id")
+  /// Who put their name to sending it. Marketing that leaves the building unreviewed is a support
+  /// incident waiting for a quiet afternoon.
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  audience   Audience?         @relation(fields: [audienceId], references: [id], onDelete: SetNull)
+  template   CampaignTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  createdBy  User?             @relation("CampaignAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  approvedBy User?             @relation("CampaignApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  /// The SMS-specific detail, when this campaign goes out by SMS. One-to-one: an SMS campaign has one,
+  /// and a campaign that is not sent by SMS has none.
+  sms SmsCampaign?
+
+  @@index([businessId, status, scheduledFor])
+  @@index([audienceId])
+  @@map("campaign")
+}
+
+/// The SMS-only detail of a campaign: the parts that make no sense for e-mail.
+///
+/// A separate table rather than columns on `Campaign`, because a sender id and a credit count are
+/// meaningless for every other channel, and a column that is always null for four channels out of five
+/// is a column that will eventually be used by mistake.
+model SmsCampaign {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  campaignId String @unique @map("campaign_id")
+
+  /// The alphanumeric sender displayed on the handset, restricted by carriers — which is why it is
+  /// stored rather than derived: what was sent from is a fact about the message.
+  senderId String @map("sender_id") @db.VarChar(11)
+  message  String @db.Text
+
+  /// The length in characters AND the number of billable segments, because 161 characters is two
+  /// messages and someone is paying for both. A concatenated SMS is billed per 153 characters, so the
+  /// two numbers cannot be derived from each other.
+  characters  Int @default(0)
+  segments    Int @default(1)
+  creditsUsed Int @default(0) @map("credits_used")
+
+  provider String?   @db.VarChar(60)
+  sentAt   DateTime? @map("sent_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@map("sms_campaign")
+}
+
+// ── Loyalty ─────────────────────────────────────────────────────────────────
+
+/// A business's loyalty scheme. One per tenant, because a business running two is running a
+/// contradiction: which balance does a customer's card show?
+model LoyaltyProgram {
+  id         String @id @default(cuid())
+  businessId String @unique @map("business_id")
+
+  name     String  @db.VarChar(160)
+  isActive Boolean @default(true) @map("is_active")
+
+  /// Points earned per unit of currency spent. Decimal and not a float: 1.5 points per euro times a
+  /// hundred orders is a rounding bug nobody finds until an audit.
+  pointsPerCurrency Decimal @default(1) @map("points_per_currency") @db.Decimal(8, 4)
+  /// What one point is worth when redeemed. Stored separately from the earn rate because the two are
+  /// negotiated apart: a business can make earning easier without making points dearer.
+  redemptionRate    Decimal @default(0.01) @map("redemption_rate") @db.Decimal(8, 4)
+
+  /// The floor below which points cannot be spent. A reward worth less than the transaction it is
+  /// applied to costs more to process than it gives away.
+  minimumRedeemPoints Int  @default(100) @map("minimum_redeem_points")
+  /// How long points last before expiry. Null means they do not — a decision a business is allowed to
+  /// make, and the reason EXPIRE is a ledger type rather than a scheduled deletion.
+  expiryDays          Int? @map("expiry_days")
+
+  tiersEnabled Boolean @default(false) @map("tiers_enabled")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business             @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  tiers        LoyaltyTier[]
+  transactions LoyaltyTransaction[]
+
+  @@map("loyalty_program")
+}
+
+/// A spending bracket with its own multiplier: "Or" earning double.
+model LoyaltyTier {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  programId  String @map("program_id")
+
+  name            String  @db.VarChar(120)
+  /// Points at which the customer enters this tier.
+  thresholdPoints Int     @map("threshold_points")
+  /// What the programme's earn rate is multiplied by. 1.00 means no change, not "disabled".
+  multiplier      Decimal @default(1) @map("multiplier") @db.Decimal(4, 2)
+
+  /// What the tier gets: early access, a free coffee, priority booking. JSON because benefits are not
+  /// uniform and nothing queries inside them.
+  benefits Json?
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  program  LoyaltyProgram @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@unique([programId, name])
+  @@index([programId, thresholdPoints])
+  @@map("loyalty_tier")
+}
+
+/// One movement of points. APPEND-ONLY, enforced by RLS.
+///
+/// ── Signed points, and why ───────────────────────────────────────────────────
+/// `points` is signed, so the ledger SUMS to the balance instead of relying on a convention about which
+/// types subtract. That convention would be got backwards once, in a reconciliation, and the customer
+/// whose balance is wrong is the one who notices.
+///
+/// ── Why a balance alone is not enough ────────────────────────────────────────
+/// "Why do I only have 40 points?" cannot be answered from a number. It can be answered from an EARN at
+/// the till, an EXPIRE three months later, and a REDEEM nobody told the customer about — which is the
+/// sequence that produces the complaint.
+model LoyaltyTransaction {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  customerId String  @map("customer_id")
+  programId  String? @map("program_id")
+
+  type LoyaltyTransactionType
+
+  /// Signed. Positive earns, negative spends.
+  points       Int
+  /// The balance immediately after this movement, recorded rather than recomputed: a statement shows a
+  /// running total, and rebuilding it later means replaying the whole ledger per row.
+  balanceAfter Int @map("balance_after")
+
+  /// The sale that earned them, when there was one.
+  orderId String? @map("order_id")
+
+  reason String? @db.VarChar(300)
+
+  /// When these points stop being spendable. Set at EARN time from the programme's `expiryDays`, so
+  /// changing the policy later does not silently re-date points already earned.
+  expiresAt DateTime? @map("expires_at")
+
+  /// Who caused it: a user for a manual adjustment, null for the system.
+  createdById String? @map("created_by_id")
+
+  /// When it happened, distinct from when the row was written.
+  occurredAt DateTime @default(now()) @map("occurred_at")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  business  Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  customer  Customer        @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  program   LoyaltyProgram? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  createdBy User?           @relation("LoyaltyAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([customerId, occurredAt])
+  @@index([businessId, type, occurredAt])
+  @@index([expiresAt])
+  @@map("loyalty_transaction")
+}
+
+/// What points can be spent on.
+model RewardRule {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+
+  type RewardType
+
+  pointsCost Int @map("points_cost")
+
+  /// The discount, or the value of the item given away.
+  valueAmount Decimal? @map("value_amount") @db.Decimal(14, 2)
+  /// The product, for FREE_ITEM.
+  productId   String?  @map("product_id")
+
+  /// The order must reach this before the reward applies — a free delivery on a €5 order is a loss.
+  minimumOrderAmount Decimal? @map("minimum_order_amount") @db.Decimal(14, 2)
+
+  isActive   Boolean   @default(true) @map("is_active")
+  validFrom  DateTime? @map("valid_from")
+  validUntil DateTime? @map("valid_until")
+
+  /// How many times the reward may be claimed in total. Null is unlimited, which is a different thing
+  /// from zero and has to be expressible.
+  usageLimit Int @default(0) @map("usage_limit")
+  usedCount  Int @default(0) @map("used_count")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, isActive, sortOrder])
+  @@map("reward_rule")
+}
+
+/// An event-driven automation: when X happens, do Y — after a delay, if the conditions still hold.
+///
+/// `delayMinutes` is not decoration. "Thanks for your first order, here is 10 % off" wants an hour's
+/// gap, and "you have not visited in 60 days" is made entirely of delay. The delay lives on the trigger
+/// rather than in the event, so one event can drive several automations with different timing.
+model AutomationTrigger {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name String @db.VarChar(160)
+
+  event        AutomationEvent
+  /// How long to wait before acting. Zero is immediate.
+  delayMinutes Int             @default(0) @map("delay_minutes")
+
+  /// Narrowing conditions, evaluated when the delay ELAPSES rather than when the event fires: a
+  /// customer may have unsubscribed in between, and acting anyway is the bug this prevents.
+  conditions Json?
+
+  action       AutomationAction
+  templateId   String?          @map("template_id")
+  /// The action's payload: which tag to add, how many points, whom to notify. JSON because the five
+  /// actions share nothing but the column.
+  actionConfig Json?            @map("action_config")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  /// How many times it has fired, and when it last did. The first question about a silent automation
+  /// is whether it ever ran at all.
+  runCount  Int       @default(0) @map("run_count")
+  lastRunAt DateTime? @map("last_run_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  template EmailTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, event, isActive])
+  @@map("automation_trigger")
+}
