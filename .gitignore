@@ -34,6 +34,15 @@ pnpm-debug.log*
 !.vscode/settings.json
 *.swp
 
+# ─── Generated files (recreated by tooling, never committed) ─────────────────
+# Next.js rewrites next-env.d.ts on every `next dev` and `next build`, and the
+# content flaps between `./.next/dev/types/...` (dev) and `./.next/types/...`
+# (build). Both variants reference the git-ignored `.next/` directory, so
+# committing it only guarantees a permanently dirty working tree.
+# It is regenerated explicitly by `next typegen` — which the app's `typecheck`
+# script runs before `tsc` — and implicitly by every dev and build run.
+apps/next/next-env.d.ts
+
 # ─── Misc ────────────────────────────────────────────────────────────────────
 .cache/
 tmp/
