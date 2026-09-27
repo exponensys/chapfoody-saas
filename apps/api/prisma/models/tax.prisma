@@ -1,0 +1,86 @@
+// Tax — the rates a business declares, and the returns it files.
+//
+// ── Why the rate is ALSO stored on each product ──────────────────────────────
+// Products carry their own `vatRate` as a plain number, and each order line copies it. This
+// table is the business's *catalogue* of rates: what it declares, what its invoices print, and
+// what a return is computed from. Linking products to a row here instead would mean a rate
+// change rewriting the tax on past sales through the join — which is precisely the thing the
+// copied value on the order line exists to prevent. The two are related by value, not by a
+// foreign key, on purpose.
+//
+// VAT appears on both sides of a business: it collects output tax on sales and pays input tax
+// on purchases. A declaration nets the two.
+
+/// A VAT rate the business uses, as it appears on its invoices.
+model VatRate {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// "TVA 10 % — restauration". Named because a business must be able to tell its accountant
+  /// which line of the return a rate feeds.
+  name String  @db.VarChar(120)
+  /// Percentage, e.g. 5.50, 10.00, 20.00. Two decimals: some jurisdictions have 8.5.
+  rate Decimal @db.Decimal(5, 2)
+
+  /// The rate pre-selected on a new product.
+  isDefault Boolean @default(false) @map("is_default")
+  isActive  Boolean @default(true) @map("is_active")
+
+  /// A free note for the accountant: "taux réduit presse", "exonéré".
+  note String? @db.Text
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// Keyed on the RATE, not the name: two labels for the same percentage are the same tax —
+  /// a restaurant's "TVA nourriture 10 %" and "TVA boisson 10 %" are one line of a return, and
+  /// letting both exist would silently split the declaration.
+  @@unique([businessId, rate])
+  @@index([businessId, isActive, sortOrder])
+  @@map("vat_rate")
+}
+
+/// One VAT return: the tax collected over a period, less the tax paid on purchases.
+model VatDeclaration {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// The period the return covers. Stored as a range rather than a label ("T3 2026") so a
+  /// query can find the declaration containing a given sale without parsing French.
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  status VatDeclarationStatus @default(DRAFT)
+
+  /// Output tax: collected from customers on sales. Computed from the order lines in the
+  /// period, then frozen here — a filed return must not move when a past order is adjusted.
+  collectedTax  Decimal @map("collected_tax") @db.Decimal(14, 2)
+  /// Input tax: paid to suppliers on purchases. Deductible.
+  deductibleTax Decimal @default(0) @map("deductible_tax") @db.Decimal(14, 2)
+  /// What is actually owed. Stored rather than derived for the same reason as the order
+  /// totals: the arithmetic is then asserted by the database, not trusted.
+  netTaxDue     Decimal @map("net_tax_due") @db.Decimal(14, 2)
+
+  /// Turnover declared alongside the tax, for the cross-checks a tax office performs.
+  taxableTurnover Decimal @default(0) @map("taxable_turnover") @db.Decimal(14, 2)
+  currency        String  @default("EUR") @db.Char(3)
+
+  filedAt   DateTime? @map("filed_at")
+  /// The tax office's own reference for the filing.
+  reference String?   @db.VarChar(120)
+  notes     String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// One return per period per business.
+  @@unique([businessId, periodStart, periodEnd])
+  @@index([businessId, status, periodStart])
+  @@map("vat_declaration")
+}

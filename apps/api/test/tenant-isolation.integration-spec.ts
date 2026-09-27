@@ -328,6 +328,82 @@ describeWhenConfigured('Tenant isolation (integration)', () => {
     expect(remaining[0]?.quantityDelta.toString()).toBe('5');
   });
 
+  it('scopes unique constraints per tenant', async () => {
+    // The claim the whole schema rests on: unique keys are tenant-inclusive, so two businesses
+    // may use the same SKU. This was asserted in the plan's test list from the start and, until
+    // now, never actually exercised.
+    const sku = `SHARED-${suffix}`;
+
+    const inA = await runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+      tx.product.create({
+        data: { businessId: tenantA, sku, slug: `shared-a-${suffix}`, name: 'Partagé', price: '1.00' },
+      }),
+    );
+    const inB = await runAsTenant(prisma, { businessId: tenantB, userId: ownerB }, (tx) =>
+      tx.product.create({
+        data: { businessId: tenantB, sku, slug: `shared-b-${suffix}`, name: 'Partagé', price: '1.00' },
+      }),
+    );
+
+    expect(inA.sku).toBe(sku);
+    expect(inB.sku).toBe(sku);
+
+    // The same SKU twice inside ONE tenant is refused — which is what makes the constraint
+    // meaningful rather than merely absent.
+    await expect(
+      runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+        tx.product.create({
+          data: {
+            businessId: tenantA,
+            sku,
+            slug: `shared-a2-${suffix}`,
+            name: 'Doublon',
+            price: '1.00',
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+
+    // And a second open till session on the same location is refused, because that uniqueness
+    // rests on a partial index rather than a key Prisma declares. One has to be open first —
+    // which is what the first statement here establishes.
+    const locationId = (
+      await runAsTenant(prisma, { businessId: tenantA }, (tx) =>
+        tx.stockLocation.findFirst({ where: { name: `Entrepôt ${suffix}` }, select: { id: true } }),
+      )
+    )?.id;
+
+    expect(locationId).toBeDefined();
+
+    await runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+      tx.posSession.create({
+        data: {
+          businessId: tenantA,
+          locationId: locationId as string,
+          openedById: ownerA,
+          openedAt: new Date(),
+          openingFloat: '50.00',
+          status: 'OPEN',
+        },
+      }),
+    );
+
+    await expect(
+      runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+        tx.posSession.create({
+          data: {
+            businessId: tenantA,
+            locationId: locationId as string,
+            openedById: ownerA,
+            openedAt: new Date(),
+            openingFloat: '25.00',
+            status: 'OPEN',
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
   it('has row-level security enabled on every table carrying a business_id', async () => {
     // The guard for the twelve domains still to come: a migration that adds a tenant
     // table and forgets ENABLE ROW LEVEL SECURITY fails here, not in production.

@@ -125,6 +125,15 @@ model Business {
   orderLineModifiers OrderLineModifier[]
   orderStatusHistory OrderStatusHistory[]
 
+  // ── Till, payments and tax ─────────────────────────────────────────────────
+  vatRates            VatRate[]
+  vatDeclarations     VatDeclaration[]
+  posSessions         PosSession[]
+  cashMovements       CashMovement[]
+  cashClosures        CashClosure[]
+  paymentTransactions PaymentTransaction[]
+  refunds             Refund[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

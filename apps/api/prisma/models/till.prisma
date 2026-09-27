@@ -1,0 +1,231 @@
+// The till — who is holding the money, what went in and out, and how it was tendered.
+//
+// ── A note on naming, because "payment" is used twice in this codebase ───────
+// `Payment` (billing domain) is a business paying the PLATFORM for its subscription.
+// `PaymentTransaction` (here) is a CUSTOMER paying the BUSINESS for an order. Different
+// amounts, different direction, different ledger. The names are long on purpose; the cost of
+// confusing them is a support conversation about a missing invoice.
+
+/// One cashier's shift on one till.
+///
+/// The session is what makes a cash figure answerable: "the drawer is short 40" is meaningless
+/// without knowing whose shift it was and what it started with. The closing figures are NOT
+/// stored here — they live on CashClosure, because a Z-report is a document that must not
+/// change once issued, while this row records only the fact that the session is over.
+model PosSession {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  locationId String @map("location_id")
+
+  openedById String  @map("opened_by_id")
+  closedById String? @map("closed_by_id")
+
+  openedAt DateTime  @map("opened_at")
+  closedAt DateTime? @map("closed_at")
+
+  /// The float the drawer starts with. Without it, "expected cash" cannot be computed and every
+  /// closure ends in an unexplained difference.
+  openingFloat Decimal @map("opening_float") @db.Decimal(14, 2)
+  currency     String  @default("EUR") @db.Char(3)
+
+  status PosSessionStatus @default(OPEN)
+
+  note String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location StockLocation @relation(fields: [locationId], references: [id], onDelete: Restrict)
+  openedBy User          @relation("PosSessionOpener", fields: [openedById], references: [id], onDelete: Restrict)
+  closedBy User?         @relation("PosSessionCloser", fields: [closedById], references: [id], onDelete: SetNull)
+
+  movements CashMovement[]
+  closure   CashClosure?
+  orders    Order[]
+  tenders   PaymentTransaction[]
+
+  @@index([businessId, status, openedAt])
+  @@index([locationId])
+  @@map("pos_session")
+}
+
+/// Money entering or leaving the drawer, as a ledger.
+///
+/// APPEND-ONLY, like `stock_movement` and `order_status_history`: a cash history that can be
+/// edited cannot be used to explain a discrepancy, which is the only reason to keep it.
+///
+/// `amount` is SIGNED — positive into the drawer, negative out — because a till report wants
+/// the arithmetic to work out by summing one column, and a sign convention in the application
+/// is a convention someone will get backwards once.
+model CashMovement {
+  id           String @id @default(cuid())
+  businessId   String @map("business_id")
+  posSessionId String @map("pos_session_id")
+
+  reason CashMovementReason
+  amount Decimal            @db.Decimal(14, 2)
+
+  /// Free text: "livraison de monnaie", "achat sacs", "erreur de rendu".
+  note String? @db.Text
+
+  actorUserId String? @map("actor_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  posSession PosSession @relation(fields: [posSessionId], references: [id], onDelete: Cascade)
+  actorUser  User?      @relation("CashMovementActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([posSessionId, createdAt])
+  @@index([businessId, createdAt])
+  @@map("cash_movement")
+}
+
+/// The Z-report: what the till said when the drawer was counted.
+///
+/// One per session, and IMMUTABLE once written. That is why it is separate from PosSession: the
+/// session records that a shift happened, this records what the figures were when it ended. An
+/// auditor reading a Z-report must be looking at the document as issued, not at a view that
+/// recomputed itself from orders since adjusted.
+///
+/// ── Why the tender breakdown is partly JSON ─────────────────────────────────
+/// The drawer figures are typed columns (`cashTotal`, `expectedCash`, `countedCash`,
+/// `difference`) because they are what the cash reconciliation is *about*, and they are what a
+/// query filters on. The remaining per-method breakdown is JSON because the ways a customer can
+/// pay are an enum that will grow — adding "crypto" should not require migrating a frozen
+/// historical report. Typed columns for what is queried, JSON for what is printed.
+model CashClosure {
+  id           String @id @default(cuid())
+  businessId   String @map("business_id")
+  posSessionId String @unique @map("pos_session_id")
+
+  closedById String   @map("closed_by_id")
+  /// When the drawer was counted — not necessarily the instant the session closed.
+  countedAt  DateTime @map("counted_at")
+
+  /// How many orders the session took, and what they were worth. Stored rather than counted
+  /// later, so the report reconciles against the orders even after they are archived.
+  orderCount         Int     @default(0) @map("order_count")
+  salesTotal         Decimal @default(0) @map("sales_total") @db.Decimal(14, 2)
+  taxTotal           Decimal @default(0) @map("tax_total") @db.Decimal(14, 2)
+  /// CASH movements only — what the drawer gained or lost beyond sales.
+  cashMovementsTotal Decimal @default(0) @map("cash_movements_total") @db.Decimal(14, 2)
+
+  // ── The drawer ─────────────────────────────────────────────────────────────
+  /// opening float + cash sales + cash movements, derived when the closure is written and then
+  /// frozen: `difference` is asserted against these two numbers rather than recomputed.
+  expectedCash Decimal @map("expected_cash") @db.Decimal(14, 2)
+  countedCash  Decimal @map("counted_cash") @db.Decimal(14, 2)
+  /// counted − expected. Negative means the drawer is short. Stored so "sessions with a
+  /// discrepancy over 10 €" is a query rather than an exercise in trusting subtraction.
+  difference   Decimal @db.Decimal(14, 2)
+
+  /// Typed because they are queried first: the cash/card split is the first thing a manager looks at.
+  cashTotal   Decimal @default(0) @map("cash_total") @db.Decimal(14, 2)
+  cardTotal   Decimal @default(0) @map("card_total") @db.Decimal(14, 2)
+  mobileTotal Decimal @default(0) @map("mobile_total") @db.Decimal(14, 2)
+  otherTotal  Decimal @default(0) @map("other_total") @db.Decimal(14, 2)
+
+  /// The full breakdown by tender method, including methods added after this report was issued.
+  tenderBreakdown Json? @map("tender_breakdown")
+
+  currency String  @default("EUR") @db.Char(3)
+  note     String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  posSession PosSession @relation(fields: [posSessionId], references: [id], onDelete: Cascade)
+  closedBy   User       @relation("CashClosureAuthor", fields: [closedById], references: [id], onDelete: Restrict)
+
+  @@index([businessId, countedAt])
+  @@map("cash_closure")
+}
+
+/// One tender: money actually handed over for one order.
+///
+/// Not to be confused with `Payment` (billing), which is a business paying the PLATFORM for its
+/// subscription. This is a customer paying the business for an order.
+///
+/// An order may have several — part cash, part card, a voucher for the rest. That is why the
+/// amount lives here rather than in a single `paidBy` field on the order, and why
+/// `Order.paidAmount` is the sum of these rows rather than a number someone typed.
+model PaymentTransaction {
+  id           String  @id @default(cuid())
+  businessId   String  @map("business_id")
+  orderId      String  @map("order_id")
+  /// Which till took it. Nullable for a storefront payment, which had no session.
+  posSessionId String? @map("pos_session_id")
+
+  method TenderMethod
+  status TenderStatus @default(CAPTURED)
+
+  amount      Decimal  @db.Decimal(14, 2)
+  currency    String   @default("EUR") @db.Char(3)
+  /// Cash only: what was handed back. A card payment has no change.
+  changeGiven Decimal? @map("change_given") @db.Decimal(14, 2)
+
+  /// The processor's reference — a card authorisation code, a mobile-money transaction id. This
+  /// is what makes a bank statement reconcilable against this table.
+  externalReference String? @map("external_reference") @db.VarChar(160)
+  /// Which network or processor: 'wave', 'orange-money', 'cinetpay'. Free text rather than an
+  /// enum because the market's providers move faster than a schema should.
+  provider          String? @db.VarChar(64)
+
+  capturedAt    DateTime? @map("captured_at")
+  failureReason String?   @map("failure_reason") @db.VarChar(200)
+
+  actorUserId String? @map("actor_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order      Order       @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  posSession PosSession? @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
+  actorUser  User?       @relation("TenderActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  refunds    Refund[]
+
+  @@index([orderId])
+  @@index([businessId, createdAt])
+  @@index([posSessionId])
+  /// Reconciliation looks a bank statement's reference up here.
+  @@index([externalReference])
+  @@map("payment_transaction")
+}
+
+/// Money given back.
+///
+/// APPEND-ONLY (SELECT and INSERT policies only). A refund is a financial event that has to stay
+/// visible; the ability to quietly delete one is the ability to hide a theft.
+model Refund {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  orderId    String @map("order_id")
+
+  /// Which tender is being reversed, when it is known. Nullable: a goodwill refund may not
+  /// correspond to one specific tender.
+  paymentTransactionId String? @map("payment_transaction_id")
+
+  amount   Decimal @db.Decimal(14, 2)
+  currency String  @default("EUR") @db.Char(3)
+
+  /// How the money went back — cash from the drawer, or a reversal to the card.
+  method TenderMethod?
+
+  reason String? @db.VarChar(200)
+
+  refundedById String? @map("refunded_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order              Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  paymentTransaction PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id], onDelete: SetNull)
+  refundedBy         User?               @relation("RefundAuthor", fields: [refundedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId])
+  @@index([businessId, createdAt])
+  @@map("refund")
+}

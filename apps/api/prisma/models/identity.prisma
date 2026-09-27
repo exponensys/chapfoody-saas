@@ -68,6 +68,15 @@ model User {
   reservations       Reservation[]        @relation("ReservationAuthor")
   orderStatusChanges OrderStatusHistory[] @relation("OrderStatusAuthor")
 
+  // And the money: who opened the shift, who counted the drawer, who took the tender, who
+  // authorised the refund.
+  posSessionsOpened PosSession[]         @relation("PosSessionOpener")
+  posSessionsClosed PosSession[]         @relation("PosSessionCloser")
+  cashMovements     CashMovement[]       @relation("CashMovementActor")
+  cashClosures      CashClosure[]        @relation("CashClosureAuthor")
+  tenders           PaymentTransaction[] @relation("TenderActor")
+  refunds           Refund[]             @relation("RefundAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

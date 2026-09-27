@@ -484,31 +484,35 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 4/N)** — Seven domain groups are done and verified on a real PostgreSQL (local 18.3 and
-Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house and sales. 56
-tables, 32 enum types, ten migrations, 14 tenant-isolation integration tests and 18 schema/seed guards, all green.
-Seven domain groups remain (till and payments, VAT, accounting, vendors, HR, delivery, affiliate, marketing,
-content, storefront and customers); they copy the pattern established here (`apps/api/prisma/models/`, and the
-conventions block at the top of `prisma/schema.prisma`).
+**Avancement (increment 5/N)** — Eight domain groups are done and verified on a real PostgreSQL (local 18.3 and
+Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, and the
+till with payments and tax. 62 models (63 tables), 32 enum types, eleven migrations, 15 tenant-isolation
+integration tests and 18 schema/seed guards, all green. Six domain groups remain (accounting, vendors, HR, delivery,
+affiliate, marketing, content, storefront and customers); they copy the pattern established here
+(`apps/api/prisma/models/`, and the conventions block at the top of `prisma/schema.prisma`).
 
-Two mechanisms now do the work that would otherwise be re-derived per domain. RLS reconciles itself:
+Three mechanisms now do work that would otherwise be re-derived per domain.
+
+RLS reconciles itself — each domain migration ends with one line, which protects any table that has since appeared
+with a `business_id` column and skips any that already has a policy. That is how the hand-written append-only
+policies on `audit_log`, `stock_movement`, `order_status_history`, `cash_movement` and `refund` survive:
 
 ```sql
 SELECT cf_apply_tenant_rls();
 ```
 
-Each domain migration ends with that one line; it protects any table that has since appeared with a `business_id`
-column, and skips any that already has a policy — which is how the hand-written append-only policies on
-`audit_log`, `stock_movement` and `order_status_history` survive. And an order's arithmetic is asserted by the
-database rather than trusted:
+The arithmetic the money depends on is asserted by the database rather than trusted:
 
 ```sql
 round(subtotal - discount_amount + tax_amount + service_fee
-      + delivery_fee + tip_amount - rounding_amount, 2) = total
+      + delivery_fee + tip_amount - rounding_amount, 2) = total   -- a receipt must add up
+difference = counted_cash - expected_cash                          -- the drawer must reconcile
+net_tax_due = collected_tax - deductible_tax                       -- the return must reconcile
 ```
 
-A receipt whose lines do not add up is therefore impossible to store, and the seed computes its demo orders in
-integer cents so that it satisfies the constraint it is also exercising.
+And uniqueness that a Prisma key cannot express is enforced by partial indexes, so SQL owns the rules SQL is good
+at: one open till per location, one default stock location per business, one price per target per list, one default
+order type.
 
 Recorded deviations from the model list in section 5.2, each deliberate:
 
@@ -525,8 +529,9 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 
 **Tâches**
 1. Write `prisma/schema.prisma` domain by domain — one PR per domain group, each carrying its own migration.
-   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Seven groups done
-   (identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house and sales); seven to go.
+   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Eight groups done
+   (identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, and the till with
+   payments and tax); six to go.
 2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[~]`
    Done for the tables that exist — 26 tenant references on the local database, 0 unprotected. Enforced for every
    future table by three tests: the RLS-coverage query and the schema-vs-list check, plus `cf_apply_tenant_rls()`
@@ -541,9 +546,12 @@ Recorded deviations from the model list in section 5.2, each deliberate:
    registry, the 8 accounts, 7 businesses with memberships, subscriptions and resolved entitlements, a **demo
    catalogue** (17 categories, 32 products, ingredients, a recipe with its bill of materials, and a modifier group),
    **demo stock** (a default location per business, 19 stocked items, an opening ledger entry each, a supplier with
-   its catalogue) and **demo orders** (16 order types, 4 tables and a booking for the businesses that seat guests,
-   and 14 orders — 2 per business, 21 lines, 42 status transitions) are seeded idempotently and through
-   `runAsTenant`. The remaining sales-adjacent demo data (till sessions, tenders, refunds) arrives with those tables.
+   its catalogue), **demo orders** (16 order types, 4 tables and a booking for the businesses that seat guests, and
+   14 orders — 2 per business, 21 lines, 42 status transitions), and **demo till activity** (10 VAT rates derived
+   from the catalogue, one open session per business with its float, 7 cash tenders and 14 drawer movements) are
+   seeded idempotently and through `runAsTenant`. `CashClosure` and `VatDeclaration` remain schema-only: an open
+   session has no Z-report by definition, and no demo row should pretend a day has ended. Same for `StockCount` and
+   `PurchaseOrder`.
 5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
    migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
    There was never a `db push` script to remove.
@@ -568,6 +576,11 @@ unverified on the local instance too — and the `db:reset` / `db:seed` aliases 
 (b) unique constraints behave per tenant; `[x]` (c) the seed is idempotent when run twice; `[x]` (d) all eight accounts
 authenticate against the seeded credentials. `[ ]` — (d) needs the Argon2id verifier from M3; the hashes it will
 verify are already correct (`$argon2id$v=19$m=19456,t=2,p=1$…`).
+
+Note on (b): it was marked complete in an earlier increment on the strength of the unique keys being
+tenant-inclusive by construction, without an assertion exercising it. That was an overstatement — the key shape was
+right, but nothing proved it. It is now a real test: the same SKU is created in two tenants (allowed) and twice in
+one tenant (refused), and a second open till session on one location is refused via the partial index.
 
 **Risques** — schema churn later → every domain PR must include its migration and a rollback note; merging a schema
 change without a migration is forbidden by review.

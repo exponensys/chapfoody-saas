@@ -35,6 +35,9 @@ model StockLocation {
   pickupPoints PickupPoint[]
   orders       Order[]
 
+  // And it has a till, with one session open at a time.
+  posSessions PosSession[]
+
   @@unique([businessId, name])
   @@index([businessId, isActive, name])
   @@map("stock_location")

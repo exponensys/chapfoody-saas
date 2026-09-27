@@ -147,6 +147,7 @@ export async function seedOrders(
   catalog: DemoCatalog,
   orderTypeIdByCode: ReadonlyMap<string, string>,
   locationId: string,
+  posSessionId: string,
 ): Promise<number> {
   const products = catalog.categories.flatMap((category) => category.products);
   const orderTypeId = orderTypeIdByCode.get('dine-in') ?? orderTypeIdByCode.get('takeaway');
@@ -184,6 +185,7 @@ export async function seedOrders(
         status: 'OPEN',
         placedAt: new Date(),
         currency,
+        posSessionId,
         // Filled in below once the lines are priced. Zero is a valid intermediate state, and
         // the whole write happens in one transaction, so nobody observes it.
         subtotal: '0.00',

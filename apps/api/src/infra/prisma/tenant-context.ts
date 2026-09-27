@@ -140,6 +140,14 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Reservation',
   // `Table` keeps its Prisma name but maps to `restaurant_table`: TABLE is a reserved word.
   'Table',
+  // Till, payments and tax (M2, increment 5)
+  'CashClosure',
+  'CashMovement',
+  'PaymentTransaction',
+  'PosSession',
+  'Refund',
+  'VatDeclaration',
+  'VatRate',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

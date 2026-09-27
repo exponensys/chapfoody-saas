@@ -45,6 +45,7 @@ import { FEATURES } from './seed/features.js';
 import { seedFrontOfHouse, seedOrderTypes, seedOrders } from './seed/orders.js';
 import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
 import { seedStock } from './seed/stock.js';
+import { seedPosSession, seedTenders, seedVatRates } from './seed/till.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -202,6 +203,10 @@ interface SeedTally {
   tables: number;
   reservations: number;
   orders: number;
+  vatRates: number;
+  posSessions: number;
+  tenders: number;
+  cashMovements: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -215,6 +220,10 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     tables: 0,
     reservations: 0,
     orders: 0,
+    vatRates: 0,
+    posSessions: 0,
+    tenders: 0,
+    cashMovements: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -374,6 +383,23 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.tables += frontOfHouse.tables;
         tally.reservations += frontOfHouse.reservations;
 
+        // ── VAT rates and the till session ─────────────────────────────────────
+        // Rates before anything that prices work: a product's rate should exist in the
+        // declaration catalogue from the start.
+        tally.vatRates += await seedVatRates(tx, tenant.id, catalog);
+
+        const session = await seedPosSession(
+          tx,
+          tenant.id,
+          stocked.locationId,
+          user.id,
+          business.currency,
+        );
+        if (session.created) {
+          tally.posSessions += 1;
+          tally.cashMovements += 1;
+        }
+
         tally.orders += await seedOrders(
           tx,
           tenant.id,
@@ -381,7 +407,13 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
           catalog,
           orderTypes.idByCode,
           stocked.locationId,
+          session.id,
         );
+
+        // The completed order is settled in cash, and the drawer records the matching movement.
+        const settled = await seedTenders(tx, tenant.id, session.id, user.id);
+        tally.tenders += settled.tenders;
+        tally.cashMovements += settled.movements;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -447,7 +479,9 @@ async function main(): Promise<void> {
         `  catalogue : ${tally.catalogProducts} produits, ${tally.orderTypes} types de commande\n` +
         `  stock     : ${tally.stockItems} articles, ${tally.stockMovements} mouvements\n` +
         `  salle     : ${tally.tables} tables, ${tally.reservations} réservations\n` +
-        `  ventes    : ${tally.orders} commandes\n` +
+        `  ventes    : ${tally.orders} commandes, ${tally.tenders} encaissements\n` +
+        `  caisse    : ${tally.posSessions} sessions, ${tally.cashMovements} mouvements de caisse\n` +
+        `  fiscalité : ${tally.vatRates} taux de TVA\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

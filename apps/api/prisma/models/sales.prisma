@@ -112,7 +112,10 @@ model Order {
   deliveryCity        String? @map("delivery_city") @db.VarChar(120)
   deliveryPhone       String? @map("delivery_phone") @db.VarChar(32)
 
-  createdById String? @map("created_by_id")
+  createdById  String? @map("created_by_id")
+  /// The till session that took this order, when it was taken at a counter. The Z-report uses
+  /// it to total a shift, which is why it is stored here rather than derived from tenders.
+  posSessionId String? @map("pos_session_id")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -124,9 +127,12 @@ model Order {
   pickupPoint PickupPoint?   @relation(fields: [pickupPointId], references: [id], onDelete: SetNull)
   reservation Reservation?   @relation(fields: [reservationId], references: [id], onDelete: SetNull)
   createdBy   User?          @relation("OrderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  posSession  PosSession?    @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
 
   lines         OrderLine[]
   statusHistory OrderStatusHistory[]
+  tenders       PaymentTransaction[]
+  refunds       Refund[]
 
   @@unique([businessId, number])
   /// The screen a busy service looks at: open orders, most recent first.
