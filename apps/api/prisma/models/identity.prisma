@@ -82,6 +82,10 @@ model User {
   accountingDocuments  Document[]         @relation("DocumentAuthor")
   accountingExports    AccountingExport[] @relation("ExportAuthor")
 
+  // Vendors may or may not have an account; both relations are nullable for that reason.
+  vendorProfiles Vendor[] @relation("VendorUser")
+  vendorsCreated Vendor[] @relation("VendorAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

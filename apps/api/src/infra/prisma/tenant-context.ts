@@ -157,6 +157,11 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'JournalEntry',
   'JournalLine',
   'SalesJournalEntry',
+  // Vendors (M2, increment 7)
+  'Vendor',
+  'VendorAssignment',
+  'VendorCommissionRule',
+  'VendorTarget',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

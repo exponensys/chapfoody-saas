@@ -484,12 +484,11 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 6/N)** — Nine domain groups are done and verified on a real PostgreSQL (local 18.3 and
+**Avancement (increment 7/N)** — Ten domain groups are done and verified on a real PostgreSQL (local 18.3 and
 Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till
-with payments and tax, and accounting. 70 models (71 tables), 40 enum types, 14 migrations, 15 tenant-isolation
-integration tests and 18 schema/seed guards, all green. Five domain groups remain (vendors, HR, delivery, affiliate,
-marketing, content, storefront and customers); they copy the pattern established here
-(`apps/api/prisma/models/`, and the conventions block at the top of `prisma/schema.prisma`).
+with payments and tax, accounting, and vendors. 74 models (75 tables), 41 enum types, 16 migrations, 15
+tenant-isolation integration tests and 18 schema/seed guards, all green. Four domain groups remain: HR, delivery,
+affiliate, and marketing/content/storefront/customers.
 
 Four mechanisms now do work that would otherwise be re-derived per domain.
 

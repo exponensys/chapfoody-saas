@@ -144,6 +144,12 @@ model Business {
   balanceSheetSnapshots BalanceSheetSnapshot[]
   accountingExports     AccountingExport[]
 
+  // ── Vendors ────────────────────────────────────────────────────────────────
+  vendors               Vendor[]
+  vendorCommissionRules VendorCommissionRule[]
+  vendorAssignments     VendorAssignment[]
+  vendorTargets         VendorTarget[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

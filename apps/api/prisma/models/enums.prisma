@@ -444,3 +444,15 @@ enum SnapshotBasis {
 
   @@map("snapshot_basis")
 }
+
+// ── Vendors ──────────────────────────────────────────────────────────────────
+
+/// What a commission rule applies to. A business-wide rate is an ORDER rule; a rule that pays more
+/// on high-margin dishes is a PRODUCT rule.
+enum CommissionScope {
+  ORDER
+  PRODUCT
+  CATEGORY
+
+  @@map("commission_scope")
+}

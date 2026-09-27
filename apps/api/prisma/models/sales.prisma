@@ -129,12 +129,14 @@ model Order {
   createdBy   User?          @relation("OrderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   posSession  PosSession?    @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
 
-  lines         OrderLine[]
-  statusHistory OrderStatusHistory[]
-  tenders       PaymentTransaction[]
-  refunds       Refund[]
+  lines            OrderLine[]
+  statusHistory    OrderStatusHistory[]
+  tenders          PaymentTransaction[]
+  refunds          Refund[]
   /// The accounting posting for this order, once it exists. One-to-one: an order is posted once.
-  salesEntry    SalesJournalEntry?
+  salesEntry       SalesJournalEntry?
+  /// Which vendor sold it, if any. One-to-one: a sale has one seller.
+  vendorAssignment VendorAssignment?
 
   @@unique([businessId, number])
   /// The screen a busy service looks at: open orders, most recent first.

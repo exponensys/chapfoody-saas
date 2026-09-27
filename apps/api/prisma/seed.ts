@@ -47,6 +47,7 @@ import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
 import { seedStock } from './seed/stock.js';
 import { seedPosSession, seedTenders, seedVatRates } from './seed/till.js';
 import { seedChartOfAccounts, seedSalesAccounting } from './seed/accounting.js';
+import { seedVendors } from './seed/vendors.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -213,6 +214,10 @@ interface SeedTally {
   journalLines: number;
   accountingDocuments: number;
   snapshots: number;
+  vendors: number;
+  commissionRules: number;
+  vendorAssignments: number;
+  vendorTargets: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -235,6 +240,10 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     journalLines: 0,
     accountingDocuments: 0,
     snapshots: 0,
+    vendors: 0,
+    commissionRules: 0,
+    vendorAssignments: 0,
+    vendorTargets: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -443,6 +452,15 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.journalLines += books.journalLines;
         tally.accountingDocuments += books.documents;
         tally.snapshots += books.snapshots;
+
+        // ── Vendors ────────────────────────────────────────────────────────────
+        // The tables that the `vendors.management` and `vendors.commissions` features have been
+        // gating since the subscription increment.
+        const vendorBooks = await seedVendors(tx, tenant.id, business.currency, user.id);
+        tally.vendors += vendorBooks.vendors;
+        tally.commissionRules += vendorBooks.commissionRules;
+        tally.vendorAssignments += vendorBooks.assignments;
+        tally.vendorTargets += vendorBooks.targets;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -514,6 +532,8 @@ async function main(): Promise<void> {
         `  compta    : ${tally.accounts} comptes, ${tally.journalEntries} écritures ` +
         `(${tally.journalLines} lignes), ${tally.accountingDocuments} documents, ` +
         `${tally.snapshots} bilans\n` +
+        `  vendeurs  : ${tally.vendors} vendeurs, ${tally.commissionRules} règles, ` +
+        `${tally.vendorAssignments} commissions, ${tally.vendorTargets} objectifs\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {
