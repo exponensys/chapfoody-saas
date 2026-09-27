@@ -484,16 +484,24 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 8/N)** — Eleven domain groups are done and verified on a real PostgreSQL (local 18.3 and
+**Avancement (increment 9/N)** — Twelve domain groups are done and verified on a real PostgreSQL (local 18.3 and
 Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till
-with payments and tax, accounting, vendors, and HR with payroll. 80 models (81 tables), 46 enum types, 18
-migrations, 15 tenant-isolation integration tests and 18 schema/seed guards, all green. Three domain groups remain:
-delivery, affiliate, and marketing/content/storefront/customers.
+with payments and tax, accounting, vendors, HR with payroll, and delivery. 88 models (89 tables), 51 enum types, 20
+migrations, 15 tenant-isolation integration tests and 18 schema/seed guards, all green. Two domain groups remain:
+affiliate, and marketing/content/storefront/customers.
 
-Payroll is the first domain that CROSSES the schema in both directions: it reads the chart of accounts and writes a
-journal entry, which is what the accounting increment was for. The entry debits a wage cost (gross plus the
-employer's contribution) and credits what the staff and the state are owed — with the employer's share on the COST
-side, because treating it as a deduction would understate what an employee costs.
+Two things surfaced in this increment and are worth recording, because both would have bitten in production:
+
+  1. **Prisma's interactive transaction timeout is 5 seconds**, and the seed hit it once enough domains existed —
+     "a query cannot be executed on an expired transaction" at 5 364 ms. `runAsTenant` now takes optional
+     `timeoutMs` / `maxWaitMs`, and the seed passes a larger one. The REQUEST path deliberately stays on Prisma's
+     default, so a request that needs more than five seconds still fails visibly instead of holding a connection.
+     Note the timeout only bit on a COLD run: a warm run does far less work, because almost everything is already
+     there. A fresh Neon branch or a CI database will need the raised limit.
+  2. **Delivery is only seeded for businesses that can actually deliver.** It creates its own delivery-type order
+     rather than stretching a dine-in or takeaway order that was never going anywhere, and returns early for the
+     three service categories whose products are not stock-tracked. Four deliveries for seven businesses is the
+     correct outcome, not a shortfall.
 
 Four mechanisms now do work that would otherwise be re-derived per domain.
 

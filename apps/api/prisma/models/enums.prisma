@@ -515,3 +515,71 @@ enum PayrollStatus {
 
   @@map("payroll_status")
 }
+
+// ── Delivery ─────────────────────────────────────────────────────────────────
+
+enum VehicleType {
+  ON_FOOT
+  BICYCLE
+  MOTORCYCLE
+  CAR
+  VAN
+  OTHER
+
+  @@map("vehicle_type")
+}
+
+/// The life of a delivery, which is shorter than the life of the order it carries: an order is
+/// COMPLETED once it is paid for, a delivery is DELIVERED once it is in the customer's hands.
+enum DeliveryStatus {
+  PENDING
+  ASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  /// The customer was not reachable, the address was wrong, the goods were refused.
+  FAILED
+  CANCELED
+
+  @@map("delivery_status")
+}
+
+/// What happened, for the timeline. Includes NOTE because the things that go wrong — a locked gate, a
+/// customer who answers on the third call — are exactly what a dispute turns on, and they are not
+/// status changes.
+enum DeliveryEventType {
+  CREATED
+  ASSIGNED
+  REASSIGNED
+  PICKED_UP
+  IN_TRANSIT
+  DELIVERED
+  FAILED
+  CANCELED
+  NOTE
+
+  @@map("delivery_event_type")
+}
+
+/// What a driver is being paid for. Signed amounts, so a settlement is a sum rather than a
+/// convention that someone will get backwards once.
+enum EarningType {
+  /// The fee for making a delivery.
+  DELIVERY
+  /// A tip the customer gave the driver.
+  TIP
+  BONUS
+  /// A correction, positive or negative — the reason is in the note.
+  ADJUSTMENT
+  DEDUCTION
+
+  @@map("earning_type")
+}
+
+enum EarningStatus {
+  PENDING
+  APPROVED
+  PAID
+
+  @@map("earning_status")
+}

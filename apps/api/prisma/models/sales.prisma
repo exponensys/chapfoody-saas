@@ -137,6 +137,8 @@ model Order {
   salesEntry       SalesJournalEntry?
   /// Which vendor sold it, if any. One-to-one: a sale has one seller.
   vendorAssignment VendorAssignment?
+  /// How it reaches the customer, when it is a delivery. One-to-one: one attempt per order.
+  delivery         Delivery?
 
   @@unique([businessId, number])
   /// The screen a busy service looks at: open orders, most recent first.

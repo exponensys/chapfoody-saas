@@ -44,6 +44,23 @@ export type TenantTransaction = Omit<
 >;
 
 /**
+ * Limits for the transaction `runAsTenant` opens.
+ *
+ * Prisma's defaults are sized for a request: 5 seconds of work, 2 seconds waiting for a connection.
+ * That is the right default for serving a user, and the wrong one for the seed, which writes a whole
+ * business — catalogue, stock, orders, till, ledger, vendors, payroll and a delivery — in a single
+ * transaction so that a partial tenant can never exist. Raising it there rather than here keeps the
+ * request path honest: a request that legitimately needs more than five seconds is a request with a
+ * design problem, and the default makes that visible instead of hiding it.
+ */
+export interface TenantTransactionOptions {
+  /** How long the transaction may run, in ms. */
+  readonly timeoutMs?: number;
+  /** How long to wait for a connection from the pool, in ms. */
+  readonly maxWaitMs?: number;
+}
+
+/**
  * Runs `work` with the tenant context applied.
  *
  * The callback receives a transaction client: queries made through it inherit the
@@ -56,6 +73,7 @@ export async function runAsTenant<T>(
   prisma: PrismaClient,
   context: TenantContext,
   work: (tx: TenantTransaction) => Promise<T>,
+  options: TenantTransactionOptions = {},
 ): Promise<T> {
   // The scoping extension is built on the BASE client and then used to open the
   // transaction, so the callback receives a client that is already both scoped and
@@ -66,10 +84,18 @@ export async function runAsTenant<T>(
   const client: PrismaClient =
     context.businessId === undefined ? prisma : scopeToTenant(prisma, context.businessId);
 
-  return client.$transaction(async (tx) => {
-    await applyTenantContext(tx, context);
-    return work(tx as unknown as TenantTransaction);
-  });
+  return client.$transaction(
+    async (tx) => {
+      await applyTenantContext(tx, context);
+      return work(tx as unknown as TenantTransaction);
+    },
+    {
+      // Only overridable, never defaulted here: Prisma's own limits are the right ones for a
+      // request, and naming them in this file would silently drift from the library.
+      ...(options.timeoutMs === undefined ? {} : { timeout: options.timeoutMs }),
+      ...(options.maxWaitMs === undefined ? {} : { maxWait: options.maxWaitMs }),
+    },
+  );
 }
 
 /**
@@ -169,6 +195,15 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Payslip',
   'Shift',
   'TimeEntry',
+  // Delivery (M2, increment 9)
+  'CompanyDriver',
+  'Delivery',
+  'DeliveryCompany',
+  'DeliveryEvent',
+  'DeliveryRadiusRule',
+  'DeliveryZone',
+  'Driver',
+  'DriverEarning',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

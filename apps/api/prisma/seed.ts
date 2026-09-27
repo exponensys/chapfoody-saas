@@ -49,12 +49,28 @@ import { seedPosSession, seedTenders, seedVatRates } from './seed/till.js';
 import { seedChartOfAccounts, seedSalesAccounting } from './seed/accounting.js';
 import { seedVendors } from './seed/vendors.js';
 import { seedHr } from './seed/hr.js';
+import { seedDelivery } from './seed/delivery.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
 if (existsSync('.env.local')) {
   process.loadEnvFile('.env.local');
 }
+
+/**
+ * How long the per-business transaction may run.
+ *
+ * Prisma's default is 5 seconds, sized for a request. The seed writes a whole business in ONE
+ * transaction — catalogue, stock, orders, till session, tenders, chart of accounts, a posted sale, a
+ * vendor commission, employees, a payroll run and its posting, a delivery with its timeline — because
+ * a partially seeded tenant is worse than a slow one. That legitimately exceeds the default, and it
+ * did: the seed failed with "a query cannot be executed on an expired transaction" at 5 364 ms once
+ * enough domains existed.
+ *
+ * Raising it here rather than in `runAsTenant` keeps the request path on Prisma's default, so a
+ * request that needs more than five seconds still fails visibly instead of holding a connection.
+ */
+const SEED_TENANT_TRANSACTION_TIMEOUT_MS = 120_000;
 
 /**
  * Refuses to run against production.
@@ -226,6 +242,12 @@ interface SeedTally {
   payrollRuns: number;
   payslips: number;
   payrollEntries: number;
+  deliveryZones: number;
+  deliveryRadiusRules: number;
+  drivers: number;
+  deliveries: number;
+  deliveryEvents: number;
+  driverEarnings: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -259,6 +281,12 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     payrollRuns: 0,
     payslips: 0,
     payrollEntries: 0,
+    deliveryZones: 0,
+    deliveryRadiusRules: 0,
+    drivers: 0,
+    deliveries: 0,
+    deliveryEvents: 0,
+    driverEarnings: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -488,6 +516,24 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.payrollRuns += hr.payrollRuns;
         tally.payslips += hr.payslips;
         tally.payrollEntries += hr.payrollEntries;
+
+        // ── Delivery ───────────────────────────────────────────────────────────
+        // A zone, two distance bands, a driver, and a delivered order with its timeline and what the
+        // driver earned.
+        const driven = await seedDelivery(
+          tx,
+          tenant.id,
+          business.currency,
+          user.id,
+          stocked.locationId,
+          orderTypes.idByCode,
+        );
+        tally.deliveryZones += driven.zones;
+        tally.deliveryRadiusRules += driven.radiusRules;
+        tally.drivers += driven.drivers;
+        tally.deliveries += driven.deliveries;
+        tally.deliveryEvents += driven.deliveryEvents;
+        tally.driverEarnings += driven.driverEarnings;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -506,7 +552,7 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         ],
         skipDuplicates: true,
       });
-    });
+    }, { timeoutMs: SEED_TENANT_TRANSACTION_TIMEOUT_MS });
 
     tally.businesses += 1;
     process.stdout.write(
@@ -565,6 +611,9 @@ async function main(): Promise<void> {
         `${tally.shifts} shifts, ${tally.timeEntries} pointages\n` +
         `  paie      : ${tally.payrollRuns} bulletins de paie, ${tally.payslips} bulletins, ` +
         `${tally.payrollEntries} écritures\n` +
+        `  livraison : ${tally.drivers} livreurs, ${tally.deliveryZones} zones, ` +
+        `${tally.deliveryRadiusRules} tranches, ${tally.deliveries} livraisons ` +
+        `(${tally.deliveryEvents} étapes, ${tally.driverEarnings} gains)\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

@@ -158,6 +158,16 @@ model Business {
   payrollRuns PayrollRun[]
   payslips    Payslip[]
 
+  // ── Delivery ───────────────────────────────────────────────────────────────
+  drivers             Driver[]
+  deliveryCompanies   DeliveryCompany[]
+  companyDrivers      CompanyDriver[]
+  deliveryZones       DeliveryZone[]
+  deliveryRadiusRules DeliveryRadiusRule[]
+  deliveries          Delivery[]
+  deliveryEvents      DeliveryEvent[]
+  driverEarnings      DriverEarning[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

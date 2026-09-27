@@ -1,0 +1,77 @@
+// Delivery — the run itself.
+//
+// One delivery per order, and the delivery carries its own copy of the address. That is the same
+// reasoning as an order line copying its price: the address a customer gave on the night is a fact
+// about that delivery, and an order's stored address must not change when the customer moves house a
+// month later.
+
+/// One attempt to get one order to a customer.
+model Delivery {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  /// One delivery per order. An order that needs redelivering after a failure is an EVENT on the same
+  /// delivery, not a second one — otherwise the fee is counted twice.
+  orderId    String @unique @map("order_id")
+
+  driverId          String? @map("driver_id")
+  deliveryCompanyId String? @map("delivery_company_id")
+  /// The zone it was priced in, when the business prices by zone. Null when it priced by distance.
+  zoneId            String? @map("zone_id")
+
+  status DeliveryStatus @default(PENDING)
+
+  // ── Where it goes, as given at the time ────────────────────────────────────
+  addressLine String   @map("address_line") @db.VarChar(200)
+  city        String?  @db.VarChar(120)
+  postalCode  String?  @map("postal_code") @db.VarChar(32)
+  phone       String?  @db.VarChar(32)
+  latitude    Decimal? @db.Decimal(9, 6)
+  longitude   Decimal? @db.Decimal(9, 6)
+  /// What the driver actually drove, when it is known.
+  distanceKm  Decimal? @map("distance_km") @db.Decimal(6, 2)
+
+  // ── Money ──────────────────────────────────────────────────────────────────
+  /// Quoted to the customer. Copied rather than looked up, so a later price change does not reprice a
+  /// delivery already made.
+  fee       Decimal  @default(0) @db.Decimal(14, 2)
+  /// What the driver is paid for it. May be less than the fee, more, or the same.
+  driverFee Decimal? @map("driver_fee") @db.Decimal(14, 2)
+  currency  String   @default("EUR") @db.Char(3)
+
+  // ── The timeline ───────────────────────────────────────────────────────────
+  assignedAt  DateTime? @map("assigned_at")
+  pickedUpAt  DateTime? @map("picked_up_at")
+  deliveredAt DateTime? @map("delivered_at")
+  failedAt    DateTime? @map("failed_at")
+
+  failureReason String? @map("failure_reason") @db.VarChar(200)
+
+  /// Proof of delivery: a photo, a signature, a name. Exactly what a disputed delivery turns on, and
+  /// which form it takes varies by market.
+  proofUrl      String? @map("proof_url") @db.Text
+  signatureUrl  String? @map("signature_url") @db.Text
+  recipientName String? @map("recipient_name") @db.VarChar(160)
+
+  notes String? @db.Text
+
+  /// Who dispatched it, for the "why did this go to that driver" question.
+  assignedById String? @map("assigned_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business        Business         @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order           Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  driver          Driver?          @relation(fields: [driverId], references: [id], onDelete: SetNull)
+  deliveryCompany DeliveryCompany? @relation(fields: [deliveryCompanyId], references: [id], onDelete: SetNull)
+  zone            DeliveryZone?    @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  assignedBy      User?            @relation("DeliveryDispatcher", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  events   DeliveryEvent[]
+  earnings DriverEarning[]
+
+  @@index([businessId, status, createdAt])
+  @@index([driverId, status])
+  @@index([deliveryCompanyId])
+  @@map("delivery")
+}

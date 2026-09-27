@@ -1,0 +1,79 @@
+// Delivery, part two: the timeline, and what the driver is owed.
+
+/// What happened during a delivery.
+///
+/// APPEND-ONLY, like the other timelines in this schema, and including free-form notes: the things
+/// that go wrong — a locked gate, a customer who answers on the third call — are exactly what a
+/// dispute turns on, and they are not status changes.
+model DeliveryEvent {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  deliveryId String @map("delivery_id")
+
+  type DeliveryEventType
+
+  /// The status before and after, when the event was a transition.
+  fromStatus DeliveryStatus? @map("from_status")
+  toStatus   DeliveryStatus? @map("to_status")
+
+  /// Where the driver was, when the device reported it. This IS the breadcrumb trail — kept as events
+  /// rather than as a separate position table, because a trail is written constantly and read once.
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  note String? @db.Text
+
+  actorUserId String? @map("actor_user_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  delivery  Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  actorUser User?    @relation("DeliveryEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([deliveryId, createdAt])
+  @@index([businessId, createdAt])
+  @@map("delivery_event")
+}
+
+/// What a driver is owed.
+///
+/// Amounts are SIGNED — a DEDUCTION or a negative ADJUSTMENT carries its own minus — so that a
+/// settlement total is a SUM rather than a convention about which types subtract. The convention would
+/// be got backwards exactly once, in a payroll, and nobody would notice until a driver did.
+///
+/// `status` gates payment: PENDING is a claim, APPROVED is a decision, PAID has left the business.
+model DriverEarning {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  driverId   String  @map("driver_id")
+  /// Null for a bonus or an adjustment that is not tied to one run.
+  deliveryId String? @map("delivery_id")
+
+  type     EarningType
+  amount   Decimal     @db.Decimal(14, 2)
+  currency String      @default("EUR") @db.Char(3)
+
+  status EarningStatus @default(PENDING)
+
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+  paidAt       DateTime? @map("paid_at")
+
+  /// Why, for anything that is not a plain delivery fee. An adjustment without a reason is a figure
+  /// nobody can defend.
+  note String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  driver     Driver    @relation(fields: [driverId], references: [id], onDelete: Cascade)
+  delivery   Delivery? @relation(fields: [deliveryId], references: [id], onDelete: SetNull)
+  approvedBy User?     @relation("EarningApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status, createdAt])
+  @@index([driverId, status])
+  @@index([deliveryId])
+  @@map("driver_earning")
+}

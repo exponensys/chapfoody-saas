@@ -94,6 +94,12 @@ model User {
   payrollRunsApproved PayrollRun[] @relation("PayrollRunApprover")
   payrollRunsCreated  PayrollRun[] @relation("PayrollRunAuthor")
 
+  // Delivery: a driver may have an account; dispatch and driver actions record who did them.
+  driverProfiles       Driver[]        @relation("DriverUser")
+  deliveriesDispatched Delivery[]      @relation("DeliveryDispatcher")
+  deliveryEvents       DeliveryEvent[] @relation("DeliveryEventActor")
+  earningsApproved     DriverEarning[] @relation("EarningApprover")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

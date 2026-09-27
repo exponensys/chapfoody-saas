@@ -1,0 +1,207 @@
+// Delivery — who delivers, and where the business is willing to go.
+//
+// ── Two kinds of driver, and the platform serves both ────────────────────────
+// An independent LIVREUR is a driver in their own right; a driver working for a SOCIÉTÉ DE LIVRAISON
+// is on that company's roster. Rather than two tables, there is one Driver and an optional link to a
+// company — because when a driver leaves the company and goes independent, their history should not
+// have to be rewritten.
+//
+// ── Zones and distance bands are different things, so they are different tables ─
+// A zone is a named area the business thinks in ("Plateau", "Almadies") and prices as a unit. A
+// radius rule is priced by distance and does not care about names. Most businesses use one or the
+// other; a few use both, and forcing one model to express both would make neither legible.
+
+/// Someone who delivers.
+model Driver {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Set when the driver also signs in — a marketplace driver does, a staff driver may not.
+  userId String? @map("user_id")
+
+  /// Short reference used on the dispatch board: "L-01".
+  code String @db.VarChar(32)
+
+  firstName String  @map("first_name") @db.VarChar(120)
+  lastName  String  @map("last_name") @db.VarChar(120)
+  phone     String  @db.VarChar(32)
+  email     String? @db.VarChar(320)
+
+  vehicleType  VehicleType @default(MOTORCYCLE) @map("vehicle_type")
+  vehiclePlate String?     @map("vehicle_plate") @db.VarChar(32)
+
+  /// Whether the driver is currently taking deliveries. Distinct from `isActive`, which says whether
+  /// they still work here at all — the two states are "on a break" and "gone".
+  isAvailable Boolean @default(true) @map("is_available")
+  isActive    Boolean @default(true) @map("is_active")
+
+  /// The last position reported. A driver's location is operational data rather than history: the
+  /// timeline of where they were is the delivery events, not a breadcrumb table nobody reads.
+  currentLatitude  Decimal?  @map("current_latitude") @db.Decimal(9, 6)
+  currentLongitude Decimal?  @map("current_longitude") @db.Decimal(9, 6)
+  lastSeenAt       DateTime? @map("last_seen_at")
+
+  /// What the driver earns per delivery by default. A Delivery may override it.
+  deliveryFee Decimal? @map("delivery_fee") @db.Decimal(14, 2)
+
+  notes String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation("DriverUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  companies  CompanyDriver[]
+  deliveries Delivery[]
+  earnings   DriverEarning[]
+
+  @@unique([businessId, code])
+  @@index([businessId, isActive, isAvailable])
+  @@index([userId])
+  @@map("driver")
+}
+
+/// A delivery company the business contracts with.
+///
+/// The company is a supplier of a service, and its drivers are on its roster — which is why
+/// CompanyDriver is a link rather than a field on Driver: the same person may move between companies.
+model DeliveryCompany {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(200)
+  contactName String? @map("contact_name") @db.VarChar(160)
+  email       String? @db.VarChar(320)
+  phone       String? @db.VarChar(32)
+
+  addressLine String? @map("address_line") @db.VarChar(200)
+  city        String? @db.VarChar(120)
+  country     String? @db.Char(2)
+
+  /// What the company keeps on each delivery, when it is paid per delivery rather than per month.
+  commissionRate Decimal? @map("commission_rate") @db.Decimal(5, 2)
+
+  isActive Boolean @default(true) @map("is_active")
+  notes    String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  drivers    CompanyDriver[]
+  deliveries Delivery[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("delivery_company")
+}
+
+/// A driver on a company's roster.
+model CompanyDriver {
+  id                String @id @default(cuid())
+  businessId        String @map("business_id")
+  deliveryCompanyId String @map("delivery_company_id")
+  driverId          String @map("driver_id")
+
+  isActive Boolean   @default(true) @map("is_active")
+  joinedAt DateTime  @default(now()) @map("joined_at")
+  leftAt   DateTime? @map("left_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business        Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  deliveryCompany DeliveryCompany @relation(fields: [deliveryCompanyId], references: [id], onDelete: Cascade)
+  driver          Driver          @relation(fields: [driverId], references: [id], onDelete: Cascade)
+
+  /// A driver is on a company's roster at most once.
+  @@unique([deliveryCompanyId, driverId])
+  @@index([businessId])
+  @@index([driverId])
+  @@map("company_driver")
+}
+
+/// A named area the business delivers to, priced as a unit.
+///
+/// A business thinks in these names — "Plateau", "Almadies", "hors commune" — and a customer asks
+/// "do you deliver to me?" by recognising one. That is why the fee sits on the zone rather than being
+/// computed from coordinates: it is a commercial decision, not a distance.
+model DeliveryZone {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(160)
+  /// A short code for imports and the dispatch board.
+  code        String? @db.VarChar(32)
+  description String? @db.Text
+  /// A colour for the map, as the business's own "#rrggbb".
+  color       String? @db.VarChar(9)
+
+  /// An approximate shape, for a map preview: a centre and radius, and optionally the vertices of a
+  /// real polygon. Stored as JSON because the shape is read whole by a map component and never
+  /// queried by its parts — normalising points into rows would buy nothing and cost a join.
+  centerLatitude  Decimal? @map("center_latitude") @db.Decimal(9, 6)
+  centerLongitude Decimal? @map("center_longitude") @db.Decimal(9, 6)
+  radiusKm        Decimal? @map("radius_km") @db.Decimal(6, 2)
+  polygon         Json?
+
+  deliveryFee           Decimal  @default(0) @map("delivery_fee") @db.Decimal(14, 2)
+  /// Below this order value, the zone's delivery is refused — a common way to stop a 3 € order
+  /// costing 5 € to deliver.
+  minOrderAmount        Decimal? @map("min_order_amount") @db.Decimal(14, 2)
+  /// Above this, delivery is free. The two thresholds together are what most businesses actually mean.
+  freeDeliveryThreshold Decimal? @map("free_delivery_threshold") @db.Decimal(14, 2)
+
+  /// What the business promises, in minutes. A promise, not a measurement.
+  estimatedMinutes Int? @map("estimated_minutes")
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive, sortOrder])
+  @@map("delivery_zone")
+}
+
+/// A fee band by distance from the business.
+///
+/// The alternative to named zones, for a business that thinks in kilometres. Bands are checked in
+/// order of `sortOrder` and the first containing band wins, so the order is a decision that is
+/// stored rather than inferred from the numbers — overlapping bands are a configuration choice, not
+/// necessarily a mistake.
+///
+/// A delivery stores the fee it was quoted, not a reference to the band that produced it: a fee
+/// change must not silently reprice deliveries already made.
+model DeliveryRadiusRule {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name String @db.VarChar(160)
+
+  /// The band: [min, max). Null max means "and beyond" — how a business stops delivering past a
+  /// distance while keeping one open-ended band in the table.
+  minDistanceKm Decimal  @default(0) @map("min_distance_km") @db.Decimal(6, 2)
+  maxDistanceKm Decimal? @map("max_distance_km") @db.Decimal(6, 2)
+
+  deliveryFee      Decimal @default(0) @map("delivery_fee") @db.Decimal(14, 2)
+  estimatedMinutes Int?    @map("estimated_minutes")
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive, sortOrder])
+  @@map("delivery_radius_rule")
+}
