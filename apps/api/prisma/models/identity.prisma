@@ -116,6 +116,12 @@ model User {
   websiteAssetsUploaded   WebsiteAsset[]    @relation("WebsiteAssetUploader")
   checkoutSettingsUpdated CheckoutSetting[] @relation("CheckoutSettingAuthor")
 
+  // Content: platform staff write the blog, moderate its comments, and own the media library.
+  blogPosts         BlogPost[]    @relation("BlogPostAuthor")
+  commentsModerated BlogComment[] @relation("CommentModerator")
+  mediaUploaded     Media[]       @relation("MediaUploader")
+  seoMetasUpdated   SeoMeta[]     @relation("SeoMetaAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

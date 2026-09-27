@@ -26,7 +26,10 @@ model BusinessType {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  businesses Business[]
+  businesses  Business[]
+  /// Case studies are marketed BY category, which is why the relation is here and the free-text
+  /// `industry` is also on the model: the two lists are deliberately not the same.
+  caseStudies CaseStudy[]
 
   @@index([isClientCategory, sortOrder])
   @@map("business_type")

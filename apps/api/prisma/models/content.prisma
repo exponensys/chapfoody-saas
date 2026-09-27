@@ -1,0 +1,408 @@
+// Content — the PLATFORM's own public site: the blog, the vidéothèque, case studies, use cases.
+//
+// ── Why these tables have no business_id, alone among the domains ─────────────
+// Everything else in this schema belongs to a tenant. These do not: the blog at /blog and the
+// vidéothèque at /videotheque are Chapfoody's own marketing pages, written by platform staff and
+// reached through /admin/blogs and /admin/videos (requirement A.IV). A tenant's own website is the
+// storefront domain, which is scoped, themed and hosted per business.
+//
+// That makes this the first domain whose isolation is not "which tenant" but "published or not", and
+// its policies reflect that: the public may read what is PUBLISHED, and only a SUPER_ADMIN may write
+// anything at all. Row-level security still applies — the risk it removes here is not a competitor
+// reading your data, it is a draft becoming public because one `where` clause was forgotten.
+//
+// ── Media versus WebsiteAsset ────────────────────────────────────────────────
+// Same distinction as above, from the other side: `Media` is the platform's own library (blog
+// illustrations, video thumbnails), `WebsiteAsset` belongs to a tenant. Merging them would mean one
+// table whose every row needs a comment saying who owns it.
+
+/// A blog section. A closed set the editors control, rather than free-form tags — the navigation of a
+/// blog is a taxonomy, and letting it grow by typo is how a blog ends up with "Recettes" twice.
+model BlogCategory {
+  id          String  @id @default(cuid())
+  slug        String  @unique @db.VarChar(160)
+  name        String  @db.VarChar(160)
+  description String? @db.Text
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  posts BlogPost[]
+
+  @@index([isActive, sortOrder])
+  @@map("blog_category")
+}
+
+/// A free-form label. Open by design, unlike a category: tags are for cross-cutting themes that
+/// emerge after the fact, and requiring an editor to create one first is how tagging stops happening.
+model BlogTag {
+  id   String @id @default(cuid())
+  slug String @unique @db.VarChar(160)
+  name String @db.VarChar(120)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  posts BlogPostTag[]
+
+  @@map("blog_tag")
+}
+
+/// The join, written out rather than left implicit.
+///
+/// Prisma would happily generate an implicit many-to-many table, and it would be a table with no
+/// policies — invisible to the RLS verifier and to anyone reading the schema. Naming it makes the
+/// relationship inspectable and lets it be covered like every other table.
+model BlogPostTag {
+  postId String @map("post_id")
+  tagId  String @map("tag_id")
+
+  post BlogPost @relation(fields: [postId], references: [id], onDelete: Cascade)
+  tag  BlogTag  @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([postId, tagId])
+  @@index([tagId])
+  @@map("blog_post_tag")
+}
+
+/// An article.
+///
+/// `scheduledFor` is a separate column from `publishedAt` on purpose. One is an intention and the
+/// other is a fact, and a post can have the first without ever reaching the second — which is exactly
+/// what a publishing queue needs to be able to say.
+model BlogPost {
+  id         String  @id @default(cuid())
+  categoryId String? @map("category_id")
+  authorId   String? @map("author_id")
+
+  slug    String  @unique @db.VarChar(200)
+  title   String  @db.VarChar(250)
+  excerpt String? @db.VarChar(500)
+  /// Markdown. Rich text would need a renderer that agrees with the editor, and both would need
+  /// versioning; markdown degrades gracefully and diffs in a review.
+  body    String  @db.Text
+
+  coverImageUrl String? @map("cover_image_url") @db.VarChar(500)
+
+  status       ContentStatus @default(DRAFT)
+  /// When the editor intends it to go live. Reaching it is a job's problem, not a column's.
+  scheduledFor DateTime?     @map("scheduled_for")
+  /// When it went live. Distinct from `createdAt`: a post written in March and published in June
+  /// belongs to June, and every archive sorts on this.
+  publishedAt  DateTime?     @map("published_at")
+
+  /// Computed at write time rather than derived on every render, because a "5 min read" badge is
+  /// worth storing once and not worth counting words for on every page view.
+  readingMinutes Int     @default(1) @map("reading_minutes")
+  viewCount      Int     @default(0) @map("view_count")
+  isFeatured     Boolean @default(false) @map("is_featured")
+
+  locale String? @db.VarChar(10)
+
+  seoTitle       String? @map("seo_title") @db.VarChar(200)
+  seoDescription String? @map("seo_description") @db.VarChar(320)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  category BlogCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  author   User?         @relation("BlogPostAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+  tags     BlogPostTag[]
+  comments BlogComment[]
+
+  @@index([status, publishedAt])
+  @@index([categoryId, status])
+  @@index([isFeatured, publishedAt])
+  @@map("blog_post")
+}
+
+/// A comment left on an article by a visitor.
+///
+/// ── The moderation state is enforced by the database, not by the API ─────────
+/// The INSERT policy for this table admits a row ONLY with status PENDING. Moderation is an UPDATE
+/// and requires a platform admin. That means the application cannot accidentally publish unmoderated
+/// input even if a controller passes `status` straight through from the request body: the row that
+/// tries it is refused by the policy, not by a validation rule someone could forget.
+///
+/// PENDING is the default for the same reason: a public comment box that publishes immediately is an
+/// invitation, and moderating afterwards means the spam was already indexed.
+model BlogComment {
+  id       String  @id @default(cuid())
+  postId   String  @map("post_id")
+  /// Threading. One level is enough for a blog, and a self-reference is cheaper than a closure table.
+  parentId String? @map("parent_id")
+
+  authorName  String  @map("author_name") @db.VarChar(160)
+  authorEmail String? @map("author_email") @db.VarChar(320)
+  body        String  @db.Text
+
+  status CommentStatus @default(PENDING)
+
+  /// Kept for the abuse review every public comment box ends up needing.
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent") @db.Text
+
+  moderatedById  String?   @map("moderated_by_id")
+  moderatedAt    DateTime? @map("moderated_at")
+  /// Why it was rejected or marked as spam, so a writer asking "where did my comment go?" has an answer.
+  moderationNote String?   @map("moderation_note") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  post        BlogPost      @relation(fields: [postId], references: [id], onDelete: Cascade)
+  parent      BlogComment?  @relation("CommentThread", fields: [parentId], references: [id], onDelete: Cascade)
+  replies     BlogComment[] @relation("CommentThread")
+  moderatedBy User?         @relation("CommentModerator", fields: [moderatedById], references: [id], onDelete: SetNull)
+
+  @@index([postId, status, createdAt])
+  @@index([parentId])
+  @@map("blog_comment")
+}
+
+/// A collection of videos: a series, a training track, "Les bases".
+model VideoCollection {
+  id            String  @id @default(cuid())
+  slug          String  @unique @db.VarChar(160)
+  title         String  @db.VarChar(200)
+  description   String? @db.Text
+  coverImageUrl String? @map("cover_image_url") @db.VarChar(500)
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  videos Video[]
+
+  @@index([isActive, sortOrder])
+  @@map("video_collection")
+}
+
+/// A video: the vidéothèque (requirement A.IV).
+///
+/// `provider` plus `externalId` rather than a URL alone, because the player has to know which embed
+/// to build, and because YouTube's id is what the thumbnail and duration can be fetched from. A
+/// SELF_HOSTED video uses `url` instead, which is why both columns exist.
+model Video {
+  id           String  @id @default(cuid())
+  collectionId String? @map("collection_id")
+
+  title       String  @db.VarChar(250)
+  slug        String? @unique @db.VarChar(200)
+  description String? @db.Text
+
+  provider   VideoProvider
+  /// YouTube or Vimeo id. Null for SELF_HOSTED.
+  externalId String?       @map("external_id") @db.VarChar(120)
+  /// The file's own URL, for SELF_HOSTED.
+  url        String?       @db.VarChar(500)
+
+  thumbnailUrl    String? @map("thumbnail_url") @db.VarChar(500)
+  durationSeconds Int?    @map("duration_seconds")
+  /// Captions or a transcript, linked rather than stored: they are large and served by the player.
+  transcriptUrl   String? @map("transcript_url") @db.VarChar(500)
+
+  status       ContentStatus @default(DRAFT)
+  publishedAt  DateTime?     @map("published_at")
+  scheduledFor DateTime?     @map("scheduled_for")
+
+  viewCount Int      @default(0) @map("view_count")
+  sortOrder Int      @default(0) @map("sort_order")
+  tags      String[] @default([])
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  collection VideoCollection? @relation(fields: [collectionId], references: [id], onDelete: SetNull)
+
+  /// A provider needs whatever identifies the video there: an id, or a URL for our own files.
+  //  (Enforced by a CHECK in the migration, since Prisma cannot express it.)
+
+  @@index([status, publishedAt, sortOrder])
+  @@index([collectionId, sortOrder])
+  @@map("video")
+}
+
+/// "Ils nous font confiance": a customer story.
+///
+/// `industry` and `businessTypeId` are both here because a case study is marketed in two directions —
+/// by sector, and by the categories the platform actually classifies businesses into — and the two
+/// lists are deliberately not the same.
+model CaseStudy {
+  id             String  @id @default(cuid())
+  businessTypeId String? @map("business_type_id")
+
+  slug         String  @unique @db.VarChar(200)
+  title        String  @db.VarChar(250)
+  businessName String  @map("business_name") @db.VarChar(200)
+  industry     String? @db.VarChar(160)
+  summary      String? @db.VarChar(500)
+  body         String  @db.Text
+
+  coverImageUrl String? @map("cover_image_url") @db.VarChar(500)
+  logoUrl       String? @map("logo_url") @db.VarChar(500)
+
+  /// The numbers the story is told with: revenue, order count, hours saved. JSON because every case
+  /// study measures something different, and a column per metric would be a column per customer.
+  results Json?
+
+  status       ContentStatus @default(DRAFT)
+  publishedAt  DateTime?     @map("published_at")
+  scheduledFor DateTime?     @map("scheduled_for")
+  sortOrder    Int           @default(0) @map("sort_order")
+  isFeatured   Boolean       @default(false) @map("is_featured")
+
+  seoTitle       String? @map("seo_title") @db.VarChar(200)
+  seoDescription String? @map("seo_description") @db.VarChar(320)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  businessType BusinessType? @relation(fields: [businessTypeId], references: [id], onDelete: SetNull)
+
+  @@index([status, publishedAt])
+  @@index([isFeatured, sortOrder])
+  @@map("case_study")
+}
+
+/// "Ce que vous pouvez faire": a job to be done, stated in the customer's terms.
+///
+/// Shorter-lived and more numerous than a case study, and addressed to a kind of business rather than
+/// to a named one — which is why `audience` is a sector label rather than a foreign key.
+model UseCase {
+  id      String  @id @default(cuid())
+  slug    String  @unique @db.VarChar(200)
+  title   String  @db.VarChar(250)
+  summary String? @db.VarChar(500)
+  body    String? @db.Text
+
+  icon     String? @db.VarChar(120)
+  audience String? @db.VarChar(160)
+
+  status       ContentStatus @default(DRAFT)
+  publishedAt  DateTime?     @map("published_at")
+  scheduledFor DateTime?     @map("scheduled_for")
+  sortOrder    Int           @default(0) @map("sort_order")
+  isActive     Boolean       @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, sortOrder])
+  @@map("use_case")
+}
+
+/// The platform's own media library: blog illustrations, video thumbnails, screenshots for the docs.
+///
+/// Like WebsiteAsset, the row is a pointer and not the file. Unlike WebsiteAsset it belongs to the
+/// platform, so its policy is admin-only rather than tenant-scoped: an unpublished screenshot is not
+/// something the public should be able to enumerate, even when its URL would work once known.
+model Media {
+  id String @id @default(cuid())
+
+  kind      MediaKind
+  url       String    @db.VarChar(500)
+  filename  String    @db.VarChar(255)
+  mimeType  String    @map("mime_type") @db.VarChar(120)
+  sizeBytes Int       @map("size_bytes")
+
+  width           Int?
+  height          Int?
+  durationSeconds Int? @map("duration_seconds")
+
+  altText String? @map("alt_text") @db.VarChar(300)
+  title   String? @db.VarChar(200)
+  /// A folder the editors made up: "Blog", "Vidéothèque", "Captures".
+  folder  String? @db.VarChar(200)
+
+  checksum String? @db.VarChar(64)
+
+  uploadedById String? @map("uploaded_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  uploadedBy User? @relation("MediaUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([kind, createdAt])
+  @@index([folder])
+  @@map("media")
+}
+
+/// A standalone page: the marketing site's own routes, and the legal ones.
+///
+/// `isSystem` marks a page the platform depends on — terms, privacy, cookies. Those cannot be
+/// deleted, only edited or archived, because a sign-up form linking to a 404 is a compliance problem
+/// rather than a broken link.
+model Page {
+  id    String @id @default(cuid())
+  slug  String @unique @db.VarChar(200)
+  title String @db.VarChar(250)
+  body  String @db.Text
+
+  status       ContentStatus @default(DRAFT)
+  publishedAt  DateTime?     @map("published_at")
+  /// Present on every schedulable content type, so the publication policy can be one rule rather than
+  /// five: a page or a use case going live on the 1st is the same requirement as a post doing so.
+  scheduledFor DateTime?     @map("scheduled_for")
+
+  /// Which layout renders it, for the marketing site's route group.
+  templateKey String? @map("template_key") @db.VarChar(80)
+  isSystem    Boolean @default(false) @map("is_system")
+
+  seoTitle       String? @map("seo_title") @db.VarChar(200)
+  seoDescription String? @map("seo_description") @db.VarChar(320)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([status, slug])
+  @@map("page")
+}
+
+/// An SEO override for a path.
+///
+/// ── Why a path rather than a foreign key ─────────────────────────────────────
+/// The obvious design is a polymorphic (entityType, entityId) pair, and it is the wrong one: the
+/// database cannot enforce a foreign key on it, so the row can point at nothing and nothing will say
+/// so. Keying on the URL PATH is what an editor actually thinks in ("/blog/mon-article"), it is the
+/// value a search engine resolves, and it is uniquely indexable — so a path has exactly one override
+/// and a second attempt is refused rather than silently shadowing the first.
+model SeoMeta {
+  id String @id @default(cuid())
+
+  /// The site path this overrides, beginning with a slash.
+  path String @unique @db.VarChar(300)
+
+  title        String? @db.VarChar(200)
+  description  String? @db.VarChar(320)
+  /// A comma-separated list, as search engines consume it, rather than an array nobody reads.
+  keywords     String? @db.VarChar(500)
+  canonicalUrl String? @map("canonical_url") @db.VarChar(500)
+  ogImageUrl   String? @map("og_image_url") @db.VarChar(500)
+  ogType       String? @map("og_type") @db.VarChar(60)
+
+  /// Keep this path out of the index. The one lever that can undo an accidental appearance in search
+  /// results without unpublishing the page it belongs to.
+  noIndex  Boolean @default(false) @map("no_index")
+  noFollow Boolean @default(false) @map("no_follow")
+
+  /// schema.org JSON-LD, verbatim. Validated as an object by a CHECK; what is inside it is the
+  /// editor's business.
+  structuredData Json? @map("structured_data")
+
+  updatedById String? @map("updated_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  updatedBy User? @relation("SeoMetaAuthor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([noIndex])
+  @@map("seo_meta")
+}

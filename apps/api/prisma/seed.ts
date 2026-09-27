@@ -53,6 +53,7 @@ import { seedDelivery } from './seed/delivery.js';
 import { seedAffiliate } from './seed/affiliate.js';
 import { reconcileCustomerTotals, seedCustomers } from './seed/customers.js';
 import { seedStorefront, seedThemePresets } from './seed/storefront.js';
+import { seedContent, type ContentCounters } from './seed/content.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -639,6 +640,41 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
   return tally;
 }
 
+/**
+ * Seeds the platform's content, as the super-admin and with no tenant in context.
+ *
+ * The context matters twice over here. The policies on `media` and `seo_meta`, and the write path for
+ * everything else, require `cf_is_platform_admin()` — which is only true for a SUPER_ADMIN — so this
+ * would be refused with any other `userId`. And it must NOT be set as a tenant: the content belongs to
+ * the platform, and a business context would be a lie the database happens to tolerate.
+ *
+ * Returns zeroes rather than throwing when there is no admin account, so a database seeded before
+ * accounts existed still completes: content with no author is a smaller problem than a seed that stops.
+ */
+async function seedPlatformContent(prisma: PrismaClient): Promise<ContentCounters> {
+  const admin = await prisma.user.findFirst({
+    where: { platformRole: 'SUPER_ADMIN' },
+    select: { id: true },
+  });
+
+  if (admin === null) {
+    return {
+      categories: 0,
+      tags: 0,
+      posts: 0,
+      collections: 0,
+      videos: 0,
+      caseStudies: 0,
+      useCases: 0,
+      media: 0,
+      pages: 0,
+      seoMetas: 0,
+    };
+  }
+
+  return runAsTenant(prisma, { userId: admin.id }, (tx) => seedContent(tx, admin.id));
+}
+
 async function main(): Promise<void> {
   assertNotProduction();
 
@@ -660,6 +696,12 @@ async function main(): Promise<void> {
       featureIds,
       businessTypeIdByKey: new Map(businessTypes.map((type) => [type.key, type.id])),
     });
+
+    // ── The platform's own content ─────────────────────────────────────────────
+    // Run as the SUPER_ADMIN and with NO tenant, because the blog and the vidéothèque belong to
+    // Chapfoody rather than to a business — and because the policies require it: the write path for
+    // content is admin-only, so seeding it as anyone else would be refused by the database.
+    const content = await seedPlatformContent(prisma);
 
     const [plans, features, users] = await Promise.all([
       prisma.plan.count(),
@@ -700,6 +742,10 @@ async function main(): Promise<void> {
         `${tally.websitePages} pages, ${tally.websiteNavigation} entrées de menu, ` +
         `${tally.websiteDomains} domaines, ${tally.websiteAssets} fichiers, ` +
         `${tally.checkoutSettings} réglages de commande\n` +
+        `  contenu   : ${content.categories} catégories, ${content.tags} étiquettes, ` +
+        `${content.posts} articles, ${content.collections} collections, ${content.videos} vidéos, ` +
+        `${content.caseStudies} études de cas, ${content.useCases} cas d'usage, ` +
+        `${content.media} médias, ${content.pages} pages, ${content.seoMetas} règles SEO\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {
