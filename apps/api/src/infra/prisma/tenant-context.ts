@@ -204,6 +204,12 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'DeliveryZone',
   'Driver',
   'DriverEarning',
+  // Affiliate (M2, increment 10)
+  'Affiliate',
+  'Commission',
+  'Payout',
+  'Referral',
+  'ReferralLink',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

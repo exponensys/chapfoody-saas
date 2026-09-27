@@ -168,6 +168,13 @@ model Business {
   deliveryEvents      DeliveryEvent[]
   driverEarnings      DriverEarning[]
 
+  // ── Affiliate ──────────────────────────────────────────────────────────────
+  affiliates    Affiliate[]
+  referralLinks ReferralLink[]
+  referrals     Referral[]
+  commissions   Commission[]
+  payouts       Payout[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

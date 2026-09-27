@@ -1,0 +1,257 @@
+// Affiliate — partners who bring customers in, and what they are owed.
+//
+// ── Whose programme is it? ───────────────────────────────────────────────────
+// An Affiliate belongs to the BUSINESS whose programme it is, not to the platform. That is what the
+// `affiliate.program` and `affiliate.commissions` features have been gating since the subscription
+// increment: a business runs its own referral programme and pays its own partners. (The 'affilie'
+// business category is a different thing — a marketing agency that uses the platform. One is a
+// partner of a business, the other is a tenant.)
+//
+// ── Attribution is an ATTRIBUTION, not a click ───────────────────────────────
+// ReferralLink counts clicks; Referral records that a click became something. Keeping them apart is
+// what makes "200 clicks, 3 sales" a report rather than two numbers someone assumes are related.
+
+/// A partner in a business's referral programme.
+model Affiliate {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Set when the affiliate also has an account. Most are marketing partners, not users.
+  userId String? @map("user_id")
+
+  /// The affiliate's own code, used to build links and to talk about them: "NADIA01".
+  code String @db.VarChar(32)
+
+  displayName String  @map("display_name") @db.VarChar(200)
+  email       String? @db.VarChar(320)
+  phone       String? @db.VarChar(32)
+  website     String? @db.VarChar(320)
+  /// Handles, one per network. JSON because the set of networks changes faster than a schema should.
+  socials     Json?
+
+  /// The default share of a referred sale, as a percentage. A Referral's commission may differ.
+  commissionRate Decimal? @map("commission_rate") @db.Decimal(5, 2)
+
+  /// How long after a click a sale is still credited to the affiliate. Stored per affiliate because
+  /// negotiating it individually is normal, and a global constant would be wrong for someone.
+  attributionWindowDays Int @default(30) @map("attribution_window_days")
+
+  status AffiliateStatus @default(PENDING)
+
+  /// How they want to be paid, and the details to do it. The details are JSON rather than columns
+  /// because every method has a different shape — and because they are the most sensitive thing in
+  /// this domain, so keeping them in one field makes them easy to encrypt as one.
+  payoutMethod  PayoutMethod? @map("payout_method")
+  payoutDetails Json?         @map("payout_details")
+
+  approvedAt DateTime? @map("approved_at")
+  notes      String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user     User?    @relation("AffiliateUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  links       ReferralLink[]
+  referrals   Referral[]
+  commissions Commission[]
+  payouts     Payout[]
+
+  @@unique([businessId, code])
+  @@index([businessId, status])
+  @@index([userId])
+  @@map("affiliate")
+}
+
+/// A trackable link an affiliate shares.
+///
+/// Clicks are counted here rather than stored as rows: a click is interesting in aggregate and
+/// worthless individually, and a row per click would be the largest table in the schema within a
+/// month, holding the least useful data in it.
+model ReferralLink {
+  id          String @id @default(cuid())
+  businessId  String @map("business_id")
+  affiliateId String @map("affiliate_id")
+
+  /// The short code in the URL. Unique per tenant.
+  code  String  @db.VarChar(32)
+  label String? @db.VarChar(160)
+
+  /// Where the link points, and what the visitor should land on. A link to a product page converts
+  /// differently from one to the homepage, and the affiliate is the one who decides.
+  targetType ReferralTarget @default(STOREFRONT) @map("target_type")
+  /// The product, page or campaign it points at. Free text: the targets live in other domains and a
+  /// foreign key to each would be a foreign key to three tables at once.
+  targetId   String?        @map("target_id")
+
+  clicks       Int       @default(0)
+  firstClickAt DateTime? @map("first_click_at")
+  lastClickAt  DateTime? @map("last_click_at")
+
+  isActive  Boolean   @default(true) @map("is_active")
+  expiresAt DateTime? @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  affiliate Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+
+  referrals Referral[]
+
+  @@unique([businessId, code])
+  @@index([affiliateId, isActive])
+  @@map("referral_link")
+}
+
+/// A click that became something.
+///
+/// One row per ATTRIBUTED EVENT, not per click. The link counts the clicks; this records the ones that
+/// mattered, which is what a commission is computed from and what makes a conversion rate a real
+/// number rather than an assumption.
+model Referral {
+  id             String  @id @default(cuid())
+  businessId     String  @map("business_id")
+  affiliateId    String  @map("affiliate_id")
+  referralLinkId String? @map("referral_link_id")
+
+  kind ReferralKind
+
+  /// The order that resulted, when the referral was a sale. UNIQUE: an order is attributed to one
+  /// affiliate or none, which is the rule that stops a sale being paid for twice.
+  orderId String? @unique @map("order_id")
+
+  /// The customer, once the customers domain exists to point at. Free text for now, deliberately: a
+  /// foreign key to a table that does not exist yet would be a placeholder pretending to be a
+  /// constraint.
+  customerRef String? @map("customer_ref") @db.VarChar(200)
+
+  status ReferralStatus @default(PENDING)
+
+  /// When the attributed event happened — NOT when the row was written. A batch import must not move
+  /// a referral into the month it was imported.
+  occurredAt DateTime @map("occurred_at")
+
+  /// What the commission is computed on: the sale's revenue, excluding tax and delivery.
+  baseAmount Decimal? @map("base_amount") @db.Decimal(14, 2)
+  currency   String   @default("EUR") @db.Char(3)
+
+  /// Why it was rejected, kept so a partner asking "what happened to my referral?" gets an answer.
+  rejectionReason String? @map("rejection_reason") @db.VarChar(200)
+
+  /// The click's context, for the fraud review an affiliate programme always ends up needing:
+  /// self-referral and click farms are both visible in an IP and a user agent.
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent") @db.Text
+
+  confirmedAt DateTime? @map("confirmed_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  affiliate    Affiliate     @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  referralLink ReferralLink? @relation(fields: [referralLinkId], references: [id], onDelete: SetNull)
+
+  commissions Commission[]
+
+  @@index([businessId, occurredAt])
+  @@index([affiliateId, status, occurredAt])
+  @@index([referralLinkId])
+  @@map("referral")
+}
+
+/// What an affiliate earned.
+///
+/// Amounts are SIGNED, as in the delivery domain, so a settlement is a sum rather than a convention
+/// about which types subtract — and the convention would be got backwards exactly once, in a payout.
+model Commission {
+  id          String  @id @default(cuid())
+  businessId  String  @map("business_id")
+  affiliateId String  @map("affiliate_id")
+  /// Null for a bonus or an adjustment that is not tied to one referral.
+  referralId  String? @map("referral_id")
+
+  type     CommissionType
+  amount   Decimal        @db.Decimal(14, 2)
+  currency String         @default("EUR") @db.Char(3)
+
+  /// The rate applied, when it was a percentage. Copied, so a rate renegotiated next month does not
+  /// change what was earned this month.
+  rate Decimal? @db.Decimal(5, 2)
+
+  status CommissionStatus @default(PENDING)
+
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+  paidAt       DateTime? @map("paid_at")
+  /// The batch it was settled in, once there is one.
+  payoutId     String?   @map("payout_id")
+
+  /// Why, for anything that is not a plain referral commission.
+  note String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  affiliate  Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  referral   Referral? @relation(fields: [referralId], references: [id], onDelete: SetNull)
+  payout     Payout?   @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+  approvedBy User?     @relation("CommissionApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([businessId, status, createdAt])
+  @@index([affiliateId, status])
+  @@index([referralId])
+  @@index([payoutId])
+  @@map("commission")
+}
+
+/// A settlement: the batch of commissions paid to one affiliate for one period.
+///
+/// A batch rather than a flag on each commission, because a payment is a fact with a date, a method
+/// and a bank reference. Marking commissions PAID individually would lose all three — and the first
+/// question a partner asks about a payment is when it arrived.
+model Payout {
+  id          String @id @default(cuid())
+  businessId  String @map("business_id")
+  affiliateId String @map("affiliate_id")
+
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  status PayoutStatus @default(DRAFT)
+
+  totalAmount Decimal       @default(0) @map("total_amount") @db.Decimal(14, 2)
+  currency    String        @default("EUR") @db.Char(3)
+  method      PayoutMethod?
+
+  /// The bank or mobile-money reference, which is what reconciliation works from.
+  reference     String? @map("reference") @db.VarChar(160)
+  /// Why it failed, when it did. A wrong account number is the commonest reason and the least useful
+  /// one to rediscover.
+  failureReason String? @map("failure_reason") @db.VarChar(200)
+
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+  paidAt       DateTime? @map("paid_at")
+
+  createdById String? @map("created_by_id")
+  note        String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  affiliate  Affiliate @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
+  approvedBy User?     @relation("PayoutApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  createdBy  User?     @relation("PayoutAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  commissions Commission[]
+
+  /// One payout per affiliate per period: paying a period twice would pay its commissions twice.
+  @@unique([affiliateId, periodStart, periodEnd])
+  @@index([businessId, status, periodStart])
+  @@map("payout")
+}

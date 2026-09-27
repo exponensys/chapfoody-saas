@@ -583,3 +583,87 @@ enum EarningStatus {
 
   @@map("earning_status")
 }
+
+// ── Affiliate ────────────────────────────────────────────────────────────────
+
+enum AffiliateStatus {
+  /// Applied, not yet approved. Deliberately separate from ACTIVE: an affiliate programme that lets
+  /// anyone earn before anyone has looked at them is a programme that pays for fraud.
+  PENDING
+  ACTIVE
+  SUSPENDED
+  TERMINATED
+
+  @@map("affiliate_status")
+}
+
+/// What was referred. A SIGNUP earns nothing by itself; it is what the signup later does that does.
+enum ReferralKind {
+  SIGNUP
+  ORDER
+  SUBSCRIPTION
+
+  @@map("referral_kind")
+}
+
+enum ReferralStatus {
+  /// Attributed but not yet earned — a new customer inside the refund window, for instance.
+  PENDING
+  CONFIRMED
+  /// Rejected on review: self-referral, a duplicate, or a refund.
+  REJECTED
+
+  @@map("referral_status")
+}
+
+enum CommissionType {
+  /// The one-off commission on a referred sale.
+  REFERRAL
+  /// A share of a recurring subscription, for as long as the referral holds.
+  RECURRING
+  BONUS
+  /// A correction, positive or negative — the reason goes in the note.
+  ADJUSTMENT
+
+  @@map("commission_type")
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  /// Undone: the referral was rejected or refunded after the commission was recorded.
+  REVERSED
+
+  @@map("commission_status")
+}
+
+enum PayoutStatus {
+  DRAFT
+  APPROVED
+  PAID
+  FAILED
+
+  @@map("payout_status")
+}
+
+enum PayoutMethod {
+  BANK_TRANSFER
+  MOBILE_MONEY
+  PAYPAL
+  CASH
+
+  @@map("payout_method")
+}
+
+/// What a referral link points at. The affiliate chooses, because a link to one product converts
+/// differently from a link to the homepage — and the difference is the affiliate's business.
+enum ReferralTarget {
+  STOREFRONT
+  PRODUCT
+  CATEGORY
+  SIGNUP
+  CUSTOM
+
+  @@map("referral_target")
+}

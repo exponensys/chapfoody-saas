@@ -50,6 +50,7 @@ import { seedChartOfAccounts, seedSalesAccounting } from './seed/accounting.js';
 import { seedVendors } from './seed/vendors.js';
 import { seedHr } from './seed/hr.js';
 import { seedDelivery } from './seed/delivery.js';
+import { seedAffiliate } from './seed/affiliate.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -248,6 +249,11 @@ interface SeedTally {
   deliveries: number;
   deliveryEvents: number;
   driverEarnings: number;
+  affiliates: number;
+  referralLinks: number;
+  referrals: number;
+  affiliateCommissions: number;
+  payouts: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -287,6 +293,11 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     deliveries: 0,
     deliveryEvents: 0,
     driverEarnings: 0,
+    affiliates: 0,
+    referralLinks: 0,
+    referrals: 0,
+    affiliateCommissions: 0,
+    payouts: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -536,6 +547,17 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.driverEarnings += driven.driverEarnings;
       }
 
+      // ── Affiliate programme ──────────────────────────────────────────────────
+      // A partner, their link, the referral attributed to the settled sale, the commission it earned,
+      // and the payout that settled it — the full lifecycle, because the interesting constraints live
+      // at the end of it.
+      const referred = await seedAffiliate(tx, tenant.id, business.currency, user.id);
+      tally.affiliates += referred.affiliates;
+      tally.referralLinks += referred.referralLinks;
+      tally.referrals += referred.referrals;
+      tally.affiliateCommissions += referred.commissions;
+      tally.payouts += referred.payouts;
+
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
       // createMany with skipDuplicates rather than an upsert, keyed on a deterministic id.
       await tx.auditLog.createMany({
@@ -614,6 +636,9 @@ async function main(): Promise<void> {
         `  livraison : ${tally.drivers} livreurs, ${tally.deliveryZones} zones, ` +
         `${tally.deliveryRadiusRules} tranches, ${tally.deliveries} livraisons ` +
         `(${tally.deliveryEvents} étapes, ${tally.driverEarnings} gains)\n` +
+        `  affilie   : ${tally.affiliates} partenaires, ${tally.referralLinks} liens, ` +
+        `${tally.referrals} parrainages, ${tally.affiliateCommissions} commissions, ` +
+        `${tally.payouts} versements\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {
