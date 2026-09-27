@@ -1,0 +1,18 @@
+@import 'tailwindcss';
+
+/* Chapfoody design tokens — brand palette, typography, radii.
+   Single definition for the whole platform: `@chapfoody/config`. */
+@import '@chapfoody/config/tailwind/preset.css';
+
+/* Tailwind scans these sources for the class names it must emit. The app's own
+   files are detected automatically; the shared UI package is declared explicitly
+   so that classes used only inside @chapfoody/ui are not purged. */
+@source '../../../../packages/ui/src';
+
+/* Baseline the prototype set inline in its index.html. Kept so that full-height
+   layouts (dashboard shell, storefront) behave the same way. */
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
