@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "extends": "./packages/config/tsconfig/base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@chapfoody/api-client": ["packages/api-client/src/index.ts"],
+      "@chapfoody/config/*": ["packages/config/*"],
+      "@chapfoody/types": ["packages/types/src/index.ts"],
+      "@chapfoody/ui": ["packages/ui/src/index.ts"]
+    }
+  },
+  "include": [],
+  "exclude": ["legacy", "node_modules", "**/dist", "**/.next"]
+}

@@ -1,0 +1,33 @@
+# pnpm workspace definition for the Chapfoody SaaS monorepo.
+#
+# Every application lives in apps/, every shared library in packages/.
+# `legacy/` is deliberately NOT listed: the frozen Vite prototype keeps its own
+# dependency tree and is excluded from the pipeline (see legacy/README.md).
+packages:
+  - 'apps/*'
+  - 'packages/*'
+
+# Dependencies allowed to run install/postinstall scripts.
+#
+# pnpm ≥ 10 blocks build scripts by default and fails the install when one is
+# ignored (ERR_PNPM_IGNORED_BUILDS). That default is a genuine security win — a
+# transitive dependency cannot execute code at install time — so instead of
+# disabling the check globally we allowlist, explicitly, only the packages that
+# actually need to build a native binary:
+#
+#   esbuild              → binary used by tsx (API dev server) and Vitest
+#   @tailwindcss/oxide   → Tailwind v4 native engine
+#   sharp                → native image processing used by next/image
+#
+# `allowBuilds` is the pnpm 12 spelling; it replaced the earlier
+# `onlyBuiltDependencies` list. `pnpm config list` reports every package still
+# awaiting a decision, which is the authoritative way to discover what is pending.
+#
+# Anything else that asks for a build script must be added here deliberately, with
+# a comment explaining why. Never use `--dangerously-allow-all-builds`: an
+# unexpected package requesting an install script is exactly the supply-chain
+# signal this default is designed to raise.
+allowBuilds:
+  '@tailwindcss/oxide': true
+  esbuild: true
+  sharp: true
