@@ -2,7 +2,15 @@
   "extends": "@chapfoody/config/tsconfig/library.json",
   "compilerOptions": {
     "rootDir": "src",
-    "outDir": "dist"
+    "outDir": "dist",
+    // CommonJS on purpose — this is the ONE package shared with a CommonJS Node
+    // service. apps/api is compiled with tsc to CJS and tested with ts-jest, whose
+    // runtime cannot `require()` an ESM file; an ESM-only build would break it.
+    // A CJS build, by contrast, is understood by all three consumers (tsc/CJS,
+    // Next.js, Vitest), so a single target removes the need for dual publishing.
+    // See this package's README for the full reasoning.
+    "module": "CommonJS",
+    "moduleResolution": "Node"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules", "src/**/*.test.ts"]

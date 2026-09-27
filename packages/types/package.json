@@ -2,7 +2,6 @@
   "name": "@chapfoody/types",
   "version": "0.1.0",
   "private": true,
-  "type": "module",
   "description": "Domain types and constants shared by the Chapfoody API and every frontend surface",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
