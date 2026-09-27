@@ -215,6 +215,15 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'CustomerAddress',
   'CustomerConsent',
   'CustomerNote',
+  // Storefront (M2, increment 12). `Theme` is deliberately absent: the presets are platform data,
+  // with no business_id, like Plan and Feature.
+  'CheckoutSetting',
+  'WebsiteAsset',
+  'WebsiteConfig',
+  'WebsiteDomain',
+  'WebsiteNavigation',
+  'WebsitePage',
+  'WebsiteTheme',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

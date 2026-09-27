@@ -111,6 +111,11 @@ model User {
   customersCreated Customer[]     @relation("CustomerAuthor")
   customerNotes    CustomerNote[] @relation("CustomerNoteAuthor")
 
+  // Storefront: who last changed the theme, uploaded a file, or touched the checkout rules.
+  websiteThemesUpdated    WebsiteTheme[]    @relation("WebsiteThemeAuthor")
+  websiteAssetsUploaded   WebsiteAsset[]    @relation("WebsiteAssetUploader")
+  checkoutSettingsUpdated CheckoutSetting[] @relation("CheckoutSettingAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

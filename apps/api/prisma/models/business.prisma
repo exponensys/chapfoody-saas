@@ -181,6 +181,15 @@ model Business {
   customerNotes     CustomerNote[]
   customerConsents  CustomerConsent[]
 
+  // ── Storefront ─────────────────────────────────────────────────────────────
+  websiteConfig     WebsiteConfig?
+  websiteTheme      WebsiteTheme?
+  websitePages      WebsitePage[]
+  websiteNavigation WebsiteNavigation[]
+  websiteDomains    WebsiteDomain[]
+  websiteAssets     WebsiteAsset[]
+  checkoutSetting   CheckoutSetting?
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

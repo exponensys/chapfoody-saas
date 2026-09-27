@@ -52,6 +52,7 @@ import { seedHr } from './seed/hr.js';
 import { seedDelivery } from './seed/delivery.js';
 import { seedAffiliate } from './seed/affiliate.js';
 import { reconcileCustomerTotals, seedCustomers } from './seed/customers.js';
+import { seedStorefront, seedThemePresets } from './seed/storefront.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -257,6 +258,13 @@ interface SeedTally {
   payouts: number;
   customers: number;
   customersReconciled: number;
+  websiteConfigs: number;
+  websiteThemes: number;
+  websitePages: number;
+  websiteNavigation: number;
+  websiteDomains: number;
+  websiteAssets: number;
+  checkoutSettings: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -303,6 +311,13 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     payouts: 0,
     customers: 0,
     customersReconciled: 0,
+    websiteConfigs: 0,
+    websiteThemes: 0,
+    websitePages: 0,
+    websiteNavigation: 0,
+    websiteDomains: 0,
+    websiteAssets: 0,
+    checkoutSettings: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -452,6 +467,25 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         // are master data; everything transactional in this domain hangs off them.
         const customers = await seedCustomers(tx, tenant.id, tenant.country, user.id);
         tally.customers += customers.count;
+
+        // ── The tenant's own website ───────────────────────────────────────────
+        // The site's identity, its theme resolved from a platform preset, its pages and menu, and the
+        // rules its checkout enforces. Nothing here stores orders: a storefront checkout writes an
+        // ordinary Order with channel STOREFRONT.
+        const storefront = await seedStorefront(
+          tx,
+          tenant.id,
+          business.slug,
+          business.name,
+          user.id,
+        );
+        tally.websiteConfigs += storefront.configs;
+        tally.websiteThemes += storefront.themes;
+        tally.websitePages += storefront.pages;
+        tally.websiteNavigation += storefront.navigation;
+        tally.websiteDomains += storefront.domains;
+        tally.websiteAssets += storefront.assets;
+        tally.checkoutSettings += storefront.checkouts;
 
         // ── Order types, front of house and a couple of orders ─────────────────
         // Order types come first: an order cannot be created without one, and the two orders
@@ -613,6 +647,9 @@ async function main(): Promise<void> {
   try {
     await seedBusinessTypes(prisma);
     await seedFeatures(prisma);
+    // The theme catalogue is platform data too: a list of designs every tenant may choose from, with
+    // no tenant of its own. Seeded once, before any business.
+    const themes = await seedThemePresets(prisma);
 
     const { planIdByKey, featureIds } = await seedPlans(prisma);
 
@@ -635,7 +672,7 @@ async function main(): Promise<void> {
     // would honestly return 0. That is the fail-closed behaviour working — worth knowing
     // before someone "fixes" this line. The seed's own tally is reported instead.
     process.stdout.write(
-      `\nSeed complete: ${plans} plans, ${features} features, ${users} users, ` +
+      `\nSeed complete: ${plans} plans, ${features} features, ${themes} thèmes, ${users} users, ` +
         `${tally.businesses} businesses\n` +
         `  catalogue : ${tally.catalogProducts} produits, ${tally.orderTypes} types de commande\n` +
         `  stock     : ${tally.stockItems} articles, ${tally.stockMovements} mouvements\n` +
@@ -659,6 +696,10 @@ async function main(): Promise<void> {
         `${tally.referrals} parrainages, ${tally.affiliateCommissions} commissions, ` +
         `${tally.payouts} versements\n` +
         `  clients   : ${tally.customers} clients, ${tally.customersReconciled} réconciliés\n` +
+        `  vitrine   : ${tally.websiteConfigs} sites, ${tally.websiteThemes} thèmes, ` +
+        `${tally.websitePages} pages, ${tally.websiteNavigation} entrées de menu, ` +
+        `${tally.websiteDomains} domaines, ${tally.websiteAssets} fichiers, ` +
+        `${tally.checkoutSettings} réglages de commande\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

@@ -736,3 +736,97 @@ enum ConsentSource {
 
   @@map("consent_source")
 }
+
+/// A page on a tenant's own website. Configuration, not an enum of routes: a bakery wants "Nos
+/// horaires" and a hairdresser wants "Tarifs", and neither should need a deployment.
+enum WebsitePageType {
+  HOME
+  MENU
+  ABOUT
+  CONTACT
+  GALLERY
+  FAQ
+  LEGAL
+  CUSTOM
+
+  @@map("website_page_type")
+}
+
+/// Where a navigation entry appears. Separate per location because the same page is usually in the
+/// header and the footer under different labels.
+enum NavigationLocation {
+  HEADER
+  FOOTER
+  MOBILE
+  SIDEBAR
+
+  @@map("navigation_location")
+}
+
+/// The state of a custom domain's setup. PENDING and VERIFYING are distinct because they fail
+/// differently: one means the DNS record has not propagated, the other means it points somewhere else.
+enum DomainStatus {
+  PENDING
+  VERIFYING
+  ACTIVE
+  FAILED
+
+  @@map("domain_status")
+}
+
+enum AssetKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  FONT
+  DOCUMENT
+  ICON
+  OTHER
+
+  @@map("asset_kind")
+}
+
+// ── Content (the platform's own public site) ─────────────────────────────────
+
+/// Draft, scheduled, published, archived. One set for every kind of content, because a blog post, a
+/// video and a case study all move through the same four states and having three nearly-identical
+/// enums would guarantee they drift apart.
+enum ContentStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  ARCHIVED
+
+  @@map("content_status")
+}
+
+enum VideoProvider {
+  YOUTUBE
+  VIMEO
+  SELF_HOSTED
+
+  @@map("video_provider")
+}
+
+enum CommentStatus {
+  /// The default, and the only safe one: a public comment box that publishes immediately is an
+  /// invitation, and moderating after the fact means the spam was already indexed.
+  PENDING
+  APPROVED
+  REJECTED
+  SPAM
+
+  @@map("comment_status")
+}
+
+/// What a media asset is. The kind decides which fields matter — dimensions for an image, duration
+/// for a video — and what a picker will offer to insert.
+enum MediaKind {
+  IMAGE
+  VIDEO
+  AUDIO
+  DOCUMENT
+  OTHER
+
+  @@map("media_kind")
+}

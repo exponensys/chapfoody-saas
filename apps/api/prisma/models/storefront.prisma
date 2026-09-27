@@ -1,0 +1,344 @@
+// Storefront — the tenant's own website, and the checkout that sits behind it.
+//
+// ── Why a website is configuration rather than code ──────────────────────────
+// A business that wants to sell online should not need a deployment. Everything here is rows: which
+// pages exist, what the menu says, which theme tokens are resolved, what the checkout insists on.
+// The plan's requirement C is a per-tenant storefront, and requirement D is that the brand colours
+// stop being hardcoded — `WebsiteTheme.tokens` is where that lands.
+//
+// ── Storefront orders are ordinary orders ────────────────────────────────────
+// Nothing here stores orders. A checkout writes to `customer_order` with channel STOREFRONT, so it
+// appears in the dashboard's live orders and in the same reports as a till sale, rather than in a
+// second pipeline that has to be reconciled against the first.
+//
+// ── WebsiteAsset versus Media ────────────────────────────────────────────────
+// Both are files and they are not the same thing. `WebsiteAsset` belongs to a tenant and is served
+// on their site; `Media` belongs to the platform and is used in the blog and the vidéothèque. Merging
+// them would mean one table whose every row needs a comment saying who owns it.
+
+/// One per business: the site's identity and whether it is live.
+model WebsiteConfig {
+  id         String @id @default(cuid())
+  businessId String @unique @map("business_id")
+
+  siteName    String  @map("site_name") @db.VarChar(200)
+  tagline     String? @db.VarChar(300)
+  description String? @db.Text
+
+  logoUrl      String? @map("logo_url") @db.VarChar(500)
+  faviconUrl   String? @map("favicon_url") @db.VarChar(500)
+  heroImageUrl String? @map("hero_image_url") @db.VarChar(500)
+
+  contactEmail String? @map("contact_email") @db.VarChar(320)
+  contactPhone String? @map("contact_phone") @db.VarChar(32)
+  whatsapp     String? @db.VarChar(32)
+  addressLine  String? @map("address_line") @db.VarChar(300)
+
+  /// One entry per network. JSON because the set of networks changes faster than a schema should.
+  socials Json?
+
+  /// Whether the site is live. A business crafts its site in private and publishes when ready —
+  /// which is a different question from whether individual pages are published.
+  isPublished     Boolean   @default(false) @map("is_published")
+  publishedAt     DateTime? @map("published_at")
+  /// Takes the site down without losing the published state.
+  maintenanceMode Boolean   @default(false) @map("maintenance_mode")
+
+  orderingEnabled Boolean @default(true) @map("ordering_enabled")
+
+  /// The site's own stylesheet, for what the theme tokens cannot express. Stored rather than
+  /// generated: a tenant editing their site should not need a build, and this is the escape hatch
+  /// that stops every request for "one more option" becoming a schema change.
+  customCss String? @map("custom_css") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@map("website_config")
+}
+
+/// A theme PRESET: platform data, like a plan or a feature, and therefore not tenant-scoped.
+///
+/// A business picks one and then overrides its tokens. Keeping the presets here rather than in code
+/// means adding a theme is a row, and keeping them separate from `WebsiteTheme` means overriding one
+/// token for one tenant cannot alter the preset everyone else is using.
+model Theme {
+  id              String  @id @default(cuid())
+  key             String  @unique @db.VarChar(64)
+  name            String  @db.VarChar(120)
+  description     String? @db.Text
+  previewImageUrl String? @map("preview_image_url") @db.VarChar(500)
+
+  /// The preset's defaults: colours, fonts, radii. JSON because a theme is a bag of design tokens and
+  /// giving each one a column would make every new token a migration.
+  tokens Json
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  websiteThemes WebsiteTheme[]
+
+  @@index([isActive, sortOrder])
+  @@map("theme")
+}
+
+/// The theme RESOLVED for one business: the preset it started from, plus whatever was changed.
+///
+/// Both parts are kept. `themeId` records the intent ("we are on the Bistro theme"), and `tokens`
+/// records the outcome after overrides. Storing only the resolved tokens would mean losing which
+/// preset to re-apply when it is improved; storing only the preset would mean losing the overrides.
+model WebsiteTheme {
+  id         String @id @default(cuid())
+  businessId String @unique @map("business_id")
+
+  themeId String? @map("theme_id")
+
+  /// The resolved tokens: preset defaults, overridden by whatever the business changed.
+  tokens     Json
+  /// A separate set for dark mode, when the theme supports one.
+  darkTokens Json? @map("dark_tokens")
+
+  /// Overrides kept apart from `tokens` so that "reset to the theme" is possible without guessing
+  /// which values came from where.
+  overrides Json?
+
+  customCss String? @map("custom_css") @db.Text
+
+  updatedById String? @map("updated_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  theme     Theme?   @relation(fields: [themeId], references: [id], onDelete: SetNull)
+  updatedBy User?    @relation("WebsiteThemeAuthor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([themeId])
+  @@map("website_theme")
+}
+
+/// A page on the tenant's site. The HOME page is the entry point; the rest are whatever they need.
+///
+/// `sections` is the page builder's content: an ordered array of blocks (hero, menu grid, gallery,
+/// opening hours). JSON rather than a table per block type, because a builder's block vocabulary
+/// changes far more often than a schema should, and nothing queries inside a block.
+model WebsitePage {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  slug  String          @db.VarChar(160)
+  title String          @db.VarChar(200)
+  type  WebsitePageType @default(CUSTOM)
+
+  /// The builder blocks, in order.
+  sections Json?
+  /// Free markdown, for pages that are prose rather than blocks — legal pages, mostly.
+  body     String? @db.Text
+
+  isPublished Boolean   @default(false) @map("is_published")
+  publishedAt DateTime? @map("published_at")
+
+  sortOrder    Int     @default(0) @map("sort_order")
+  /// Hidden from navigation without unpublishing: a page can be linked from an e-mail and still not
+  /// be in the menu.
+  showInNav    Boolean @default(true) @map("show_in_nav")
+  /// A members-only page, for a business that gives prices to signed-in customers.
+  requiresAuth Boolean @default(false) @map("requires_auth")
+
+  seoTitle       String? @map("seo_title") @db.VarChar(200)
+  seoDescription String? @map("seo_description") @db.VarChar(320)
+  ogImageUrl     String? @map("og_image_url") @db.VarChar(500)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  navigation WebsiteNavigation[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isPublished, sortOrder])
+  @@map("website_page")
+}
+
+/// A navigation entry: header, footer, mobile menu or sidebar.
+///
+/// A self-referencing tree rather than a fixed depth, because "Menu" with three children is the first
+/// thing anyone builds and a two-level design would be wrong the same week. `pageId` links to a page
+/// when the entry is a page; `url` covers everything else, including external links.
+model WebsiteNavigation {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  location NavigationLocation @default(HEADER)
+  parentId String?            @map("parent_id")
+  pageId   String?            @map("page_id")
+
+  label String  @db.VarChar(120)
+  /// An absolute or relative URL, when the entry is not a page of this site.
+  url   String? @db.VarChar(500)
+
+  sortOrder     Int     @default(0) @map("sort_order")
+  isVisible     Boolean @default(true) @map("is_visible")
+  opensInNewTab Boolean @default(false) @map("opens_in_new_tab")
+  /// A small label beside the entry: "Nouveau", "Promo".
+  badge         String? @db.VarChar(40)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   WebsiteNavigation?  @relation("NavigationTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children WebsiteNavigation[] @relation("NavigationTree")
+  page     WebsitePage?        @relation(fields: [pageId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, location, sortOrder])
+  @@index([parentId])
+  @@map("website_navigation")
+}
+
+/// A hostname the tenant's site answers on.
+///
+/// `hostname` is unique GLOBALLY, not per business, and that is the point: two tenants cannot both
+/// claim `boulangerie-diop.com`, and a global unique index is the only thing that can say so without
+/// a race. Hostnames are stored lower-cased by the application so the index cannot be defeated by
+/// capitalisation.
+model WebsiteDomain {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  hostname  String       @unique @db.VarChar(255)
+  isPrimary Boolean      @default(false) @map("is_primary")
+  status    DomainStatus @default(PENDING)
+
+  /// The value the tenant must add to their DNS. Stored so the instructions survive a page reload.
+  verificationToken String? @map("verification_token") @db.VarChar(64)
+  /// The records they must create, and what we observed the last time we looked.
+  dnsRecords        Json?   @map("dns_records")
+
+  verifiedAt    DateTime? @map("verified_at")
+  sslIssuedAt   DateTime? @map("ssl_issued_at")
+  lastCheckedAt DateTime? @map("last_checked_at")
+  /// Why it is not working. "Vérification échouée" is not an answer a tenant can act on.
+  failureReason String?   @map("failure_reason") @db.VarChar(300)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, isPrimary])
+  @@map("website_domain")
+}
+
+/// A file belonging to a tenant: image, font, document.
+///
+/// The row is a pointer, not a blob. `url` is where the object store serves it from; `checksum`
+/// exists so re-uploading the same logo twice can be caught and deduplicated rather than stored
+/// twice and paid for twice.
+model WebsiteAsset {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  kind      AssetKind
+  url       String    @db.VarChar(500)
+  filename  String    @db.VarChar(255)
+  mimeType  String    @map("mime_type") @db.VarChar(120)
+  sizeBytes Int       @map("size_bytes")
+
+  /// Only meaningful for images and video, and the reason a gallery can lay out without downloading
+  /// every file to measure it.
+  width           Int?
+  height          Int?
+  /// Video only.
+  durationSeconds Int? @map("duration_seconds")
+
+  altText String? @map("alt_text") @db.VarChar(300)
+  title   String? @db.VarChar(200)
+  /// A folder path the tenant made up: "Produits", "Équipe".
+  folder  String? @db.VarChar(200)
+
+  checksum String? @db.VarChar(64)
+
+  uploadedById String? @map("uploaded_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  uploadedBy User?    @relation("WebsiteAssetUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([businessId, kind, createdAt])
+  @@index([businessId, folder])
+  @@map("website_asset")
+}
+
+/// What the checkout insists on, and how an order may be fulfilled.
+///
+/// Separate from WebsiteConfig because it is a different job with a different owner: the site's
+/// identity is marketing's concern, the checkout rules are operations'. They are also read at
+/// different moments — the config when a page renders, these when an order is about to be placed —
+/// and only these should ever be able to refuse an order.
+model CheckoutSetting {
+  id         String @id @default(cuid())
+  businessId String @unique @map("business_id")
+
+  // ── Who may order ──────────────────────────────────────────────────────────
+  /// Guest checkout on by default: forcing an account before a first order is the most reliable way
+  /// to lose the order, and a customer account can be offered afterwards.
+  allowGuestCheckout Boolean @default(true) @map("allow_guest_checkout")
+  requirePhone       Boolean @default(true) @map("require_phone")
+  requireEmail       Boolean @default(false) @map("require_email")
+  /// Requires a saved CustomerAddress before the order can be placed.
+  requireAddress     Boolean @default(false) @map("require_address")
+
+  // ── How it may be fulfilled ────────────────────────────────────────────────
+  pickupEnabled   Boolean @default(true) @map("pickup_enabled")
+  deliveryEnabled Boolean @default(false) @map("delivery_enabled")
+  dineInEnabled   Boolean @default(false) @map("dine_in_enabled")
+
+  /// The smallest order accepted. Under it the fee structure stops making sense, and a business that
+  /// cannot say so ends up refusing orders by telephone instead.
+  minimumOrderAmount Decimal? @map("minimum_order_amount") @db.Decimal(14, 2)
+  maximumOrderAmount Decimal? @map("maximum_order_amount") @db.Decimal(14, 2)
+
+  /// How far ahead an order must be placed, and the time of day after which it is taken for the next
+  /// day. Stored as "HH:MM" because it is a wall-clock rule, not an instant.
+  leadTimeMinutes Int     @default(20) @map("lead_time_minutes")
+  orderCutoffTime String? @map("order_cutoff_time") @db.VarChar(5)
+
+  /// Whether the site is taking orders right now — a kitchen that has stopped, as opposed to
+  /// `WebsiteConfig.orderingEnabled`, which says whether the feature exists at all.
+  acceptingOrders Boolean @default(true) @map("accepting_orders")
+
+  // ── Money and payment ─────────────────────────────────────────────────────
+  /// Whether displayed prices already include tax. One boolean decides how every price on the site
+  /// is rendered, and the number shown must match the number charged.
+  taxInclusivePricing Boolean @default(true) @map("tax_inclusive_pricing")
+
+  tipsEnabled Boolean @default(false) @map("tips_enabled")
+  /// The suggested percentages, e.g. [5, 10, 15]. JSON because they are a display detail.
+  tipPresets  Json?   @map("tip_presets")
+
+  /// Which providers the checkout offers, and in what order. JSON rather than columns because the
+  /// provider list grows, and the PaymentProvider abstraction is deliberately open.
+  acceptedPaymentMethods Json? @map("accepted_payment_methods")
+
+  termsUrl   String? @map("terms_url") @db.VarChar(500)
+  privacyUrl String? @map("privacy_url") @db.VarChar(500)
+
+  updatedById String? @map("updated_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  updatedBy User?    @relation("CheckoutSettingAuthor", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@map("checkout_setting")
+}
