@@ -1,0 +1,169 @@
+// Accounting, part two: the documents behind the entries, the balance sheet, and the exports.
+//
+// ── Which invariants are enforced where, stated plainly ──────────────────────
+// A journal entry's balance is enforced by the DATABASE (a CHECK plus a deferred trigger) because
+// the books must balance — that is the definition of double entry, not a preference.
+//
+// A document's `total = subtotal + tax` is a CHECK here too. But that its LINES sum to its subtotal
+// is NOT enforced by a trigger: the application validates it, because a half-built invoice is a
+// legitimate intermediate state (lines are added one at a time over minutes) while a half-built
+// journal entry is not. Saying which invariants are guaranteed and which are merely intended is
+// part of the schema being honest about itself.
+
+/// A sales invoice, a supplier invoice, a credit note, a receipt.
+///
+/// The counterpart of a journal entry, not a replacement for it: the entry is the accounting fact,
+/// the document is the paper someone will ask to see.
+model Document {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  type   DocumentType
+  /// "FA-2026-0007". Unique per tenant AND per type: a credit note and an invoice may legitimately
+  /// share a number in a business's own numbering.
+  number String       @db.VarChar(64)
+
+  issueDate DateTime  @map("issue_date")
+  dueDate   DateTime? @map("due_date")
+
+  /// The counterparty's name as printed — a snapshot, not a relation: a document must still read
+  /// correctly after a supplier is renamed or deleted.
+  partyName  String  @map("party_name") @db.VarChar(200)
+  partyEmail String? @map("party_email") @db.VarChar(320)
+
+  subtotal  Decimal @db.Decimal(14, 2)
+  taxAmount Decimal @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  total     Decimal @db.Decimal(14, 2)
+  currency  String  @default("EUR") @db.Char(3)
+
+  status DocumentStatus @default(DRAFT)
+
+  /// What this document is the accounting of, when the link exists.
+  journalEntryId  String? @unique @map("journal_entry_id")
+  orderId         String? @map("order_id")
+  purchaseOrderId String? @map("purchase_order_id")
+
+  pdfUrl String? @map("pdf_url") @db.Text
+  notes  String? @db.Text
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("DocumentAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines DocumentLine[]
+
+  @@unique([businessId, type, number])
+  @@index([businessId, issueDate])
+  @@index([businessId, status, dueDate])
+  @@map("accounting_document")
+}
+
+/// One line of a document: what was invoiced, at what price and rate.
+model DocumentLine {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  documentId String @map("document_id")
+
+  description String @db.VarChar(300)
+
+  /// Negative on a credit note line, which is why the CHECK in the migration has to cope with signs.
+  quantity  Decimal @db.Decimal(14, 3)
+  unitPrice Decimal @map("unit_price") @db.Decimal(14, 2)
+  taxRate   Decimal @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount Decimal @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  lineTotal Decimal @map("line_total") @db.Decimal(14, 2)
+
+  /// Which account this line posts to, so an accountant can reclassify one line without rebuilding
+  /// the document.
+  accountId String? @map("account_id")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  document Document     @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  account  AccountPlan? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([documentId, sortOrder])
+  @@index([businessId])
+  @@map("document_line")
+}
+
+/// A balance sheet at a point in time.
+///
+/// A SNAPSHOT, not a view: it records what the balance sheet said on the day it was produced, which
+/// is what an accountant files and what a bank asks to see. Recomputing it later from the ledger
+/// would give a different answer as soon as anyone books a late invoice into a closed period — and
+/// the point of closing a period is that its figures stop moving.
+model BalanceSheetSnapshot {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  asOfDate DateTime      @map("as_of_date")
+  basis    SnapshotBasis @default(PROVISIONAL)
+
+  totalAssets      Decimal @map("total_assets") @db.Decimal(14, 2)
+  totalLiabilities Decimal @map("total_liabilities") @db.Decimal(14, 2)
+  totalEquity      Decimal @map("total_equity") @db.Decimal(14, 2)
+
+  /// The income-statement side, kept alongside so one row answers "how did we get here?".
+  revenue   Decimal @default(0) @db.Decimal(14, 2)
+  expenses  Decimal @default(0) @db.Decimal(14, 2)
+  netResult Decimal @default(0) @map("net_result") @db.Decimal(14, 2)
+
+  currency String  @default("EUR") @db.Char(3)
+  note     String? @db.Text
+
+  generatedAt DateTime @default(now()) @map("generated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  /// One snapshot per date per basis: a provisional and a final balance sheet for the same date are
+  /// different documents, and each may exist only once.
+  @@unique([businessId, asOfDate, basis])
+  @@index([businessId, asOfDate])
+  @@map("balance_sheet_snapshot")
+}
+
+/// A run of the accountant's export.
+///
+/// Tracked rather than generated on demand, so the file handed to an accountant can be identified
+/// later: which period, when, by whom. An export nobody can trace is an export nobody can defend in
+/// an audit.
+model AccountingExport {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  format ExportFormat @default(CSV)
+  status ExportStatus @default(PENDING)
+
+  fileUrl  String? @map("file_url") @db.Text
+  /// How many journal lines went in, so a truncated file is detectable.
+  rowCount Int?    @map("row_count")
+
+  generatedAt  DateTime? @map("generated_at")
+  /// Why it failed, kept so the next attempt is not a guess.
+  errorMessage String?   @map("error_message") @db.Text
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  createdBy User?    @relation("ExportAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([businessId, periodStart])
+  @@index([businessId, status])
+  @@map("accounting_export")
+}

@@ -46,6 +46,7 @@ import { seedFrontOfHouse, seedOrderTypes, seedOrders } from './seed/orders.js';
 import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
 import { seedStock } from './seed/stock.js';
 import { seedPosSession, seedTenders, seedVatRates } from './seed/till.js';
+import { seedChartOfAccounts, seedSalesAccounting } from './seed/accounting.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -207,6 +208,11 @@ interface SeedTally {
   posSessions: number;
   tenders: number;
   cashMovements: number;
+  accounts: number;
+  journalEntries: number;
+  journalLines: number;
+  accountingDocuments: number;
+  snapshots: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -224,6 +230,11 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     posSessions: 0,
     tenders: 0,
     cashMovements: 0,
+    accounts: 0,
+    journalEntries: 0,
+    journalLines: 0,
+    accountingDocuments: 0,
+    snapshots: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -414,6 +425,24 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         const settled = await seedTenders(tx, tenant.id, session.id, user.id);
         tally.tenders += settled.tenders;
         tally.cashMovements += settled.movements;
+
+        // ── Accounting ─────────────────────────────────────────────────────────
+        // The chart first, then the posting of the settled sale: the entry is written as a draft,
+        // its lines added, and only then posted — which is the only order the policies allow.
+        const chart = await seedChartOfAccounts(tx, tenant.id);
+        tally.accounts += chart.count;
+
+        const books = await seedSalesAccounting(
+          tx,
+          tenant.id,
+          business.currency,
+          chart.idByCode,
+          user.id,
+        );
+        tally.journalEntries += books.journalEntries;
+        tally.journalLines += books.journalLines;
+        tally.accountingDocuments += books.documents;
+        tally.snapshots += books.snapshots;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -482,6 +511,9 @@ async function main(): Promise<void> {
         `  ventes    : ${tally.orders} commandes, ${tally.tenders} encaissements\n` +
         `  caisse    : ${tally.posSessions} sessions, ${tally.cashMovements} mouvements de caisse\n` +
         `  fiscalité : ${tally.vatRates} taux de TVA\n` +
+        `  compta    : ${tally.accounts} comptes, ${tally.journalEntries} écritures ` +
+        `(${tally.journalLines} lignes), ${tally.accountingDocuments} documents, ` +
+        `${tally.snapshots} bilans\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

@@ -355,3 +355,92 @@ enum VatDeclarationStatus {
 
   @@map("vat_declaration_status")
 }
+
+// ── Accounting ───────────────────────────────────────────────────────────────
+
+/// The five classes of a chart of accounts. Every account belongs to exactly one, and it decides
+/// which side of the balance sheet or the income statement the account lands on.
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  REVENUE
+  EXPENSE
+
+  @@map("account_type")
+}
+
+/// Which journal an entry belongs to. Accounting is kept in separate books because they are read
+/// separately: the cash journal is reconciled against the drawer, the sales journal against orders.
+enum JournalCode {
+  SALES
+  PURCHASES
+  CASH
+  BANK
+  PAYROLL
+  STOCK
+  VAT
+  GENERAL
+
+  @@map("journal_code")
+}
+
+enum JournalEntryStatus {
+  DRAFT
+  POSTED
+  /// An entry reversed by a compensating entry. Kept visible: accounting history is not edited,
+  /// it is corrected in the open.
+  REVERSED
+
+  @@map("journal_entry_status")
+}
+
+enum DocumentType {
+  SALES_INVOICE
+  CREDIT_NOTE
+  PURCHASE_INVOICE
+  RECEIPT
+  DELIVERY_NOTE
+  OTHER
+
+  @@map("document_type")
+}
+
+enum DocumentStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  VOID
+
+  @@map("document_status")
+}
+
+/// What the accountant asked for. FEC is the French legal exchange format
+/// (fichier des écritures comptables) — worth naming explicitly because "CSV" is not accepted by an
+/// auditor in its place.
+enum ExportFormat {
+  CSV
+  EXCEL
+  PDF
+  FEC
+
+  @@map("export_format")
+}
+
+enum ExportStatus {
+  PENDING
+  GENERATED
+  FAILED
+
+  @@map("export_status")
+}
+
+/// A periodic snapshot's state. A provisional balance sheet is a real thing in accounting: it is
+/// produced before the period is closed, and it must be distinguishable from the final one.
+enum SnapshotBasis {
+  PROVISIONAL
+  FINAL
+
+  @@map("snapshot_basis")
+}

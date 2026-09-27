@@ -484,18 +484,18 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 5/N)** — Eight domain groups are done and verified on a real PostgreSQL (local 18.3 and
-Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, and the
-till with payments and tax. 62 models (63 tables), 32 enum types, eleven migrations, 15 tenant-isolation
-integration tests and 18 schema/seed guards, all green. Six domain groups remain (accounting, vendors, HR, delivery,
-affiliate, marketing, content, storefront and customers); they copy the pattern established here
+**Avancement (increment 6/N)** — Nine domain groups are done and verified on a real PostgreSQL (local 18.3 and
+Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till
+with payments and tax, and accounting. 70 models (71 tables), 40 enum types, 14 migrations, 15 tenant-isolation
+integration tests and 18 schema/seed guards, all green. Five domain groups remain (vendors, HR, delivery, affiliate,
+marketing, content, storefront and customers); they copy the pattern established here
 (`apps/api/prisma/models/`, and the conventions block at the top of `prisma/schema.prisma`).
 
-Three mechanisms now do work that would otherwise be re-derived per domain.
+Four mechanisms now do work that would otherwise be re-derived per domain.
 
 RLS reconciles itself — each domain migration ends with one line, which protects any table that has since appeared
-with a `business_id` column and skips any that already has a policy. That is how the hand-written append-only
-policies on `audit_log`, `stock_movement`, `order_status_history`, `cash_movement` and `refund` survive:
+with a `business_id` column and skips any that already has a policy. That is how the hand-written policies on
+`audit_log`, `stock_movement`, `order_status_history`, `cash_movement` and `refund` survive:
 
 ```sql
 SELECT cf_apply_tenant_rls();
@@ -504,15 +504,20 @@ SELECT cf_apply_tenant_rls();
 The arithmetic the money depends on is asserted by the database rather than trusted:
 
 ```sql
-round(subtotal - discount_amount + tax_amount + service_fee
-      + delivery_fee + tip_amount - rounding_amount, 2) = total   -- a receipt must add up
-difference = counted_cash - expected_cash                          -- the drawer must reconcile
-net_tax_due = collected_tax - deductible_tax                       -- the return must reconcile
+round(subtotal - discount_amount + tax_amount + ... - rounding_amount, 2) = total  -- a receipt adds up
+difference  = counted_cash - expected_cash                                          -- the drawer balances
+net_tax_due = collected_tax - deductible_tax                                        -- the return reconciles
+round(total_liabilities + total_equity, 2) = total_assets                           -- the sheet balances
 ```
 
-And uniqueness that a Prisma key cannot express is enforced by partial indexes, so SQL owns the rules SQL is good
-at: one open till per location, one default stock location per business, one price per target per list, one default
-order type.
+Uniqueness a Prisma key cannot express is enforced by partial indexes: one open till per location, one default stock
+location per business, one price per target per list, one default order type.
+
+And the one invariant no CHECK can express — that a journal entry's lines add up to its totals, and that it balances
+— is enforced by a DEFERRABLE constraint trigger. Deferred matters: within a transaction the debit and credit lines
+may be inserted in any order, and only the committed state is verified. The accounting policies go further than
+tenancy: a posted entry cannot be updated, only reversed, and its lines can only be written while the parent entry
+is still a draft.
 
 Recorded deviations from the model list in section 5.2, each deliberate:
 
@@ -529,9 +534,9 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 
 **Tâches**
 1. Write `prisma/schema.prisma` domain by domain — one PR per domain group, each carrying its own migration.
-   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Eight groups done
-   (identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, and the till with
-   payments and tax); six to go.
+   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Nine groups done
+   (identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till with
+   payments and tax, and accounting); five to go.
 2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[~]`
    Done for the tables that exist — 26 tenant references on the local database, 0 unprotected. Enforced for every
    future table by three tests: the RLS-coverage query and the schema-vs-list check, plus `cf_apply_tenant_rls()`
@@ -551,7 +556,9 @@ Recorded deviations from the model list in section 5.2, each deliberate:
    from the catalogue, one open session per business with its float, 7 cash tenders and 14 drawer movements) are
    seeded idempotently and through `runAsTenant`. `CashClosure` and `VatDeclaration` remain schema-only: an open
    session has no Z-report by definition, and no demo row should pretend a day has ended. Same for `StockCount` and
-   `PurchaseOrder`.
+   `PurchaseOrder`. Accounting is seeded as a chart of 8 accounts per business plus the posting of the settled sale:
+   the entry is written as a draft, its lines added, and only then posted — the only order the policies allow. The
+   tip is credited to a liability rather than to revenue, because it is money held for staff.
 5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
    migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
    There was never a `db push` script to remove.

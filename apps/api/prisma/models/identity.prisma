@@ -77,6 +77,11 @@ model User {
   tenders           PaymentTransaction[] @relation("TenderActor")
   refunds           Refund[]             @relation("RefundAuthor")
 
+  // And the books: who posted an entry, who issued a document, who ran an export.
+  journalEntriesPosted JournalEntry[]     @relation("JournalEntryPoster")
+  accountingDocuments  Document[]         @relation("DocumentAuthor")
+  accountingExports    AccountingExport[] @relation("ExportAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

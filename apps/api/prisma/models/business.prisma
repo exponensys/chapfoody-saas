@@ -134,6 +134,16 @@ model Business {
   paymentTransactions PaymentTransaction[]
   refunds             Refund[]
 
+  // ── Accounting ─────────────────────────────────────────────────────────────
+  accountPlans          AccountPlan[]
+  journalEntries        JournalEntry[]
+  journalLines          JournalLine[]
+  salesJournalEntries   SalesJournalEntry[]
+  accountingDocuments   Document[]
+  documentLines         DocumentLine[]
+  balanceSheetSnapshots BalanceSheetSnapshot[]
+  accountingExports     AccountingExport[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

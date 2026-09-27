@@ -148,6 +148,15 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Refund',
   'VatDeclaration',
   'VatRate',
+  // Accounting (M2, increment 6)
+  'AccountPlan',
+  'AccountingExport',
+  'BalanceSheetSnapshot',
+  'Document',
+  'DocumentLine',
+  'JournalEntry',
+  'JournalLine',
+  'SalesJournalEntry',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

@@ -133,6 +133,8 @@ model Order {
   statusHistory OrderStatusHistory[]
   tenders       PaymentTransaction[]
   refunds       Refund[]
+  /// The accounting posting for this order, once it exists. One-to-one: an order is posted once.
+  salesEntry    SalesJournalEntry?
 
   @@unique([businessId, number])
   /// The screen a busy service looks at: open orders, most recent first.

@@ -1,0 +1,171 @@
+// Accounting — the chart of accounts, and the journal everything is written to.
+//
+// The domain this file opens is the one where sloppiness is most expensive: accounting figures are
+// read by an accountant, a bank and a tax office, and each of them will notice a number that does
+// not follow from the others. So the two invariants that matter are enforced by the DATABASE:
+//
+//   • an entry's debits equal its credits            → a CHECK on the entry's own totals
+//   • its lines add up to those totals               → a deferred constraint trigger
+//
+// Together they make an unbalanced entry impossible to commit, which is the property the rest of
+// the domain is allowed to assume.
+
+/// One account in the business's chart of accounts.
+///
+/// Self-nesting, because a chart of accounts is a tree (7 → 70 → 707) and reports are read at
+/// several levels of it. `code` is the number an accountant says out loud; the hierarchy is derived
+/// from it in practice but stored explicitly so a report does not have to parse strings.
+model AccountPlan {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  parentId   String? @map("parent_id")
+
+  /// The account number: "707", "44571". Unique per tenant, because two businesses keep their own
+  /// charts — and two different charts may legitimately use the same number for different accounts.
+  code String @db.VarChar(32)
+  name String @db.VarChar(200)
+
+  type AccountType
+
+  /// Descriptive, from the country's standard chart ("Ventes de marchandises"). Helps an
+  /// accountant recognise an account whose name the business has customised.
+  description String? @db.Text
+
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   AccountPlan?  @relation("AccountTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children AccountPlan[] @relation("AccountTree")
+
+  lines         JournalLine[]
+  documentLines DocumentLine[]
+
+  @@unique([businessId, code])
+  @@index([businessId, type, sortOrder])
+  @@index([parentId])
+  @@map("account_plan")
+}
+
+/// One journal entry — an écriture — in double entry.
+///
+/// ── The two invariants, and where they live ──────────────────────────────────
+/// `totalDebit = totalCredit` is a CHECK on this row: cheap, always on, and it makes an unbalanced
+/// entry impossible to store. That the LINES add up to those totals is enforced by a deferred
+/// constraint trigger added in the migration, because a CHECK cannot see other rows.
+///
+/// Deferred to COMMIT on purpose: a caller may insert the debit line and the credit line in any
+/// order within one transaction, and only the committed state is verified. That is what makes the
+/// guarantee compatible with ordinary code — no insert order is privileged.
+model JournalEntry {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Sequential per tenant and per journal: "VE-2026-000142". What the accountant cites.
+  number  String      @db.VarChar(32)
+  journal JournalCode
+
+  /// The date the event belongs to, which is NOT the date it was recorded. Entering February's
+  /// invoices in March must not move the revenue into March.
+  entryDate   DateTime @map("entry_date")
+  description String   @db.VarChar(300)
+  currency    String   @default("EUR") @db.Char(3)
+
+  status JournalEntryStatus @default(DRAFT)
+
+  /// Stored so the balance CHECK can exist, and so a ledger can be summed without joining lines.
+  /// The trigger keeps them equal to the sum of the lines.
+  totalDebit  Decimal @map("total_debit") @db.Decimal(14, 2)
+  totalCredit Decimal @map("total_credit") @db.Decimal(14, 2)
+
+  /// What produced it, so an accountant can walk from a figure back to the sale or purchase.
+  /// Free text type rather than an enum: 'order', 'purchase_order', 'payroll_run', 'vat_return'.
+  referenceType String? @map("reference_type") @db.VarChar(48)
+  referenceId   String? @map("reference_id")
+
+  postedAt   DateTime? @map("posted_at")
+  postedById String?   @map("posted_by_id")
+
+  /// The entry this one reverses, or the one that reversed it. A correction is a new entry, never
+  /// an edit: accounting history is corrected in the open, and a reversed entry stays readable.
+  reversalOfId String? @map("reversal_of_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  postedBy   User?          @relation("JournalEntryPoster", fields: [postedById], references: [id], onDelete: SetNull)
+  reversalOf JournalEntry?  @relation("EntryReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversedBy JournalEntry[] @relation("EntryReversal")
+
+  lines        JournalLine[]
+  salesEntries SalesJournalEntry[]
+  documents    Document[]
+
+  @@unique([businessId, number])
+  @@index([businessId, entryDate])
+  @@index([businessId, journal, entryDate])
+  @@index([businessId, status, entryDate])
+  @@index([referenceType, referenceId])
+  @@map("journal_entry")
+}
+
+/// One side of one line of an entry.
+///
+/// Exactly one of `debit` / `credit` is non-zero, and both are never zero — the same
+/// `num_nonnulls`-style rule as the polymorphic targets elsewhere, expressed with a CHECK because
+/// the columns are non-nullable with a default of zero.
+model JournalLine {
+  id             String @id @default(cuid())
+  businessId     String @map("business_id")
+  journalEntryId String @map("journal_entry_id")
+  accountId      String @map("account_id")
+
+  /// The libellé an accountant reads: "Vente 2026-000142", "TVA collectée 10 %".
+  label String @db.VarChar(300)
+
+  debit  Decimal @default(0) @db.Decimal(14, 2)
+  credit Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Display order within the entry. Not a business rule, but a ledger that prints in a random
+  /// order is a ledger someone misreads.
+  position Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account      AccountPlan  @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  @@index([journalEntryId, position])
+  @@index([accountId, createdAt])
+  @@index([businessId])
+  @@map("journal_line")
+}
+
+/// Records that an order has been posted to the ledger.
+///
+/// This exists for one reason: idempotency. Accounting runs are retried, backfilled and replayed,
+/// and posting the same sale twice inflates the revenue of a period in a way that is very hard to
+/// notice and very annoying to undo. `orderId` is unique, so a second attempt fails loudly instead
+/// of quietly double-counting.
+model SalesJournalEntry {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  orderId    String @unique @map("order_id")
+
+  journalEntryId String @unique @map("journal_entry_id")
+
+  postedAt DateTime @default(now()) @map("posted_at")
+
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order        Order        @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  journalEntry JournalEntry @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, postedAt])
+  @@map("sales_journal_entry")
+}
