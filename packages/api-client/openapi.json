@@ -1,0 +1,96 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/health": {
+      "get": {
+        "description": "Reports that the process is running. Performs no dependency check.",
+        "operationId": "HealthController_liveness",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Liveness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/db": {
+      "get": {
+        "description": "Runs a `SELECT 1` round trip against PostgreSQL.",
+        "operationId": "HealthController_database",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Database readiness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/health/queue": {
+      "get": {
+        "description": "Runs a Redis round trip. Reports `disabled` when REDIS_URL is unset.",
+        "operationId": "HealthController_queue",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Queue readiness probe",
+        "tags": [
+          "health"
+        ]
+      }
+    },
+    "/v1/meta": {
+      "get": {
+        "description": "Running milestone and the ten supported business categories.",
+        "operationId": "MetaController_get",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Platform metadata",
+        "tags": [
+          "meta"
+        ]
+      }
+    }
+  },
+  "info": {
+    "title": "Chapfoody API",
+    "description": "API de la plateforme Chapfoody : gestion et vente en ligne pour les restaurants,\nbars et maquis, métiers de bouche, épiceries et fruiteries, boutiques et supermarchés,\nproducteurs, traiteurs, livreurs et affiliés.\n\nConventions de réponse :\n- Toute erreur renvoie `{ code, message, details?, requestId, path, timestamp }`.\n- `code` est stable et exploitable par le client (voir @chapfoody/api-client).\n- `requestId` permet de retrouver la requête dans les journaux.",
+    "version": "1.0",
+    "contact": {}
+  },
+  "tags": [
+    {
+      "name": "health",
+      "description": "Sondes de disponibilité (hors préfixe /v1)"
+    },
+    {
+      "name": "meta",
+      "description": "Métadonnées de la plateforme"
+    }
+  ],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "access-token": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {}
+  }
+}
