@@ -104,6 +104,23 @@ export async function applyTenantContext(
 export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'AuditLog',
   'BusinessMember',
+  // Catalogue (M2, increment 2)
+  'Collection',
+  'CollectionProduct',
+  'Ingredient',
+  'Modifier',
+  'ModifierGroup',
+  'PriceList',
+  'PriceListItem',
+  'Product',
+  'ProductAllergen',
+  'ProductCategory',
+  'ProductModifierGroup',
+  'ProductVariant',
+  'Recipe',
+  'RecipeLine',
+  'Utensil',
+  // Subscriptions and billing
   'Entitlement',
   'Invitation',
   'Payment',

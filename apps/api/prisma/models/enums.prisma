@@ -160,3 +160,66 @@ enum InvoiceStatus {
 
   @@map("invoice_status")
 }
+
+// ── Catalog, inventory and purchasing ────────────────────────────────────────
+
+/// How a product is counted and sold. Drives whether quantities may be fractional:
+/// grams and litres may, pieces may not.
+enum ProductUnit {
+  PIECE
+  KILOGRAM
+  GRAM
+  LITRE
+  MILLILITRE
+  PORTION
+  BOX
+  PACK
+
+  @@map("product_unit")
+}
+
+/// The sales channel a price list applies to. A restaurant sells the same dish at
+/// different prices on site, for takeaway and through a delivery platform.
+enum PriceChannel {
+  DINE_IN
+  TAKEAWAY
+  DELIVERY
+  ONLINE
+  B2B
+
+  @@map("price_channel")
+}
+
+/// Whether a product contains an allergen or merely risks traces of it. Legally
+/// distinct, and confusing them is a health matter, so they are separate values.
+enum AllergenPresence {
+  CONTAINS
+  MAY_CONTAIN
+
+  @@map("allergen_presence")
+}
+
+/// Why stock moved. Kept apart from "how much" so that a stock report can separate a
+/// sale from a delivery, a loss, a stock count correction or a transfer.
+enum StockMovementReason {
+  PURCHASE
+  SALE
+  RETURN
+  WASTE
+  ADJUSTMENT
+  STOCK_COUNT
+  TRANSFER
+
+  @@map("stock_movement_reason")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  SENT
+  /// Partially delivered: the supplier sent less than ordered.
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELED
+
+  @@map("purchase_order_status")
+}

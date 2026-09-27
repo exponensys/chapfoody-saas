@@ -1,0 +1,260 @@
+// Catalogue — what a business sells.
+//
+// Every model here is tenant-owned: it carries `businessId`, sits under row-level
+// security, and is listed in TENANT_SCOPED_MODELS (a unit test fails if the two drift).
+// Unique keys are tenant-inclusive on purpose — two restaurants may both sell a
+// "plat-du-jour" and both use the SKU "PLJ-001", and neither should collide with the other.
+//
+// Allergen is the exception and lives in catalog-menu.prisma: the fourteen allergens are
+// a fixed legal list, identical for every tenant.
+
+/// A category in a business's own tree (Entrées, Plats, Boissons…).
+///
+/// Self-referencing so a tenant can nest as deeply as it wants. Deleting a parent is
+/// restricted rather than cascading: silently re-parenting or destroying a subtree of
+/// products is not something a delete should decide.
+model ProductCategory {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  parentId   String? @map("parent_id")
+
+  name        String  @db.VarChar(160)
+  /// Per-tenant unique. Lower-case kebab, usable in a storefront URL.
+  slug        String  @db.VarChar(160)
+  description String? @db.Text
+  imageUrl    String? @map("image_url") @db.Text
+  sortOrder   Int     @default(0) @map("sort_order")
+  isActive    Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  parent   ProductCategory?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children ProductCategory[] @relation("CategoryTree")
+  products Product[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, parentId, sortOrder])
+  @@index([businessId, isActive])
+  @@map("product_category")
+}
+
+/// A merchandising group — "Nouveautés", "Promotions", "Menu du midi".
+///
+/// Separate from ProductCategory because the two answer different questions: a category
+/// is where a product belongs, a collection is where it is being promoted. A product
+/// belongs to one category and to any number of collections.
+model Collection {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(160)
+  slug        String  @db.VarChar(160)
+  description String? @db.Text
+  imageUrl    String? @map("image_url") @db.Text
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  /// An optional window, so a seasonal collection expires without anyone remembering.
+  startsAt DateTime? @map("starts_at")
+  endsAt   DateTime? @map("ends_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products CollectionProduct[]
+
+  @@unique([businessId, slug])
+  @@index([businessId, isActive, sortOrder])
+  @@map("collection")
+}
+
+/// Which products are in which collection.
+model CollectionProduct {
+  id           String @id @default(cuid())
+  businessId   String @map("business_id")
+  collectionId String @map("collection_id")
+  productId    String @map("product_id")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  collection Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  product    Product    @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  /// A product is in a collection at most once.
+  @@unique([collectionId, productId])
+  @@index([businessId])
+  @@index([productId])
+  @@map("collection_product")
+}
+
+/// A sellable item.
+model Product {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  categoryId String? @map("category_id")
+
+  /// Human-facing stock code. Unique per tenant, not globally.
+  sku  String @db.VarChar(64)
+  name String @db.VarChar(200)
+  slug String @db.VarChar(200)
+
+  description      String? @db.Text
+  /// For the storefront card and the POS tile, where the full text does not fit.
+  shortDescription String? @map("short_description") @db.VarChar(300)
+  imageUrl         String? @map("image_url") @db.Text
+
+  /// Ordered extra images. A scalar list rather than a table: they carry no attributes
+  /// of their own beyond position, and nothing ever queries one in isolation.
+  galleryUrls String[] @map("gallery_urls")
+
+  /// Money as DECIMAL(14,2), never a float.
+  price     Decimal  @db.Decimal(14, 2)
+  /// What it costs to make or buy. Drives the margin report, and is not public.
+  costPrice Decimal? @map("cost_price") @db.Decimal(14, 2)
+  currency  String   @default("EUR") @db.Char(3)
+  /// French VAT rates include 5.5, 10 and 20; some markets charge none.
+  vatRate   Decimal  @default(0) @map("vat_rate") @db.Decimal(5, 2)
+
+  unit       ProductUnit @default(PIECE)
+  /// Whether selling this moves stock. A service, or a made-to-order dish, does not.
+  trackStock Boolean     @default(true) @map("track_stock")
+
+  isActive    Boolean @default(true) @map("is_active")
+  isFeatured  Boolean @default(false) @map("is_featured")
+  /// Visible on the public storefront, as opposed to only in the back office and the POS.
+  isPublished Boolean @default(false) @map("is_published")
+  sortOrder   Int     @default(0) @map("sort_order")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  business       Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  category       ProductCategory?       @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  variants       ProductVariant[]
+  collections    CollectionProduct[]
+  allergens      ProductAllergen[]
+  modifierGroups ProductModifierGroup[]
+  priceListItems PriceListItem[]
+  recipe         Recipe?
+
+  /// SKU and slug are unique per tenant: two restaurants may both sell a "plat-du-jour"
+  /// and both use "PLJ-001", and neither should collide with the other.
+  @@unique([businessId, sku])
+  @@unique([businessId, slug])
+  @@index([businessId, categoryId, sortOrder])
+  @@index([businessId, isActive, isPublished])
+  @@index([businessId, deletedAt])
+  @@map("product")
+}
+
+/// A variation of a product — "Petit / Grand", "33cl / 50cl".
+///
+/// Price is an override rather than a delta: with a delta, changing the base price of a
+/// large coffee silently changes every variant derived from it.
+model ProductVariant {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  productId  String @map("product_id")
+
+  name    String  @db.VarChar(160)
+  sku     String  @db.VarChar(64)
+  barcode String? @db.VarChar(64)
+
+  /// Null means "inherit the product's price".
+  priceOverride Decimal? @map("price_override") @db.Decimal(14, 2)
+
+  /// A variant may be tracked independently of its product.
+  trackStock Boolean @default(true) @map("track_stock")
+  /// The variant used when a product is sold without choosing one.
+  isDefault  Boolean @default(false) @map("is_default")
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceListItems PriceListItem[]
+
+  @@unique([businessId, sku])
+  /// Two variants of the same product cannot share a name.
+  @@unique([productId, name])
+  @@index([businessId, productId, sortOrder])
+  @@map("product_variant")
+}
+
+/// Prices for a sales channel — the same dish costs one thing on site, another through
+/// a delivery platform that takes a commission.
+model PriceList {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name      String       @db.VarChar(160)
+  channel   PriceChannel
+  /// The list applied when a channel has no specific list.
+  isDefault Boolean      @default(false) @map("is_default")
+
+  currency   String    @default("EUR") @db.Char(3)
+  /// An optional validity window, so a seasonal list expires on its own.
+  validFrom  DateTime? @map("valid_from")
+  validUntil DateTime? @map("valid_until")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  items    PriceListItem[]
+
+  @@unique([businessId, name])
+  @@index([businessId, channel, isActive])
+  @@map("price_list")
+}
+
+/// One price in one list, for a product or for a specific variant of it.
+///
+/// ── Why the uniqueness is partly enforced in raw SQL ─────────────────────────
+/// The rule is "at most one price per product, and at most one per variant, in a given
+/// list". A Prisma `@@unique([priceListId, productId, variantId])` cannot express it:
+/// PostgreSQL treats NULLs as distinct, so a product-level row (variantId NULL) could be
+/// inserted twice and both would be accepted. The migration therefore adds two partial
+/// unique indexes, which state the rule exactly:
+///
+///   UNIQUE (price_list_id, product_id) WHERE variant_id IS NULL
+///   UNIQUE (price_list_id, variant_id) WHERE variant_id IS NOT NULL
+model PriceListItem {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  priceListId String  @map("price_list_id")
+  productId   String  @map("product_id")
+  /// Null prices the product as a whole; set, it prices that one variant.
+  variantId   String? @map("variant_id")
+
+  price Decimal @db.Decimal(14, 2)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  priceList PriceList       @relation(fields: [priceListId], references: [id], onDelete: Cascade)
+  product   Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant   ProductVariant? @relation(fields: [variantId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([priceListId])
+  @@index([productId])
+  @@index([variantId])
+  @@map("price_list_item")
+}

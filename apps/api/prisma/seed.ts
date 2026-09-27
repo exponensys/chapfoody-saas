@@ -39,6 +39,8 @@ import { PrismaClient } from '../src/generated/prisma/client.js';
 import { hashPassword } from '../src/infra/crypto/password.js';
 import { runAsTenant } from '../src/infra/prisma/tenant-context.js';
 import { ACCOUNTS } from './seed/accounts.js';
+import { seedCatalog } from './seed/catalog.js';
+import { DEMO_CATALOGS } from './seed/catalog-data.js';
 import { FEATURES } from './seed/features.js';
 import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
 
@@ -188,9 +190,15 @@ function addMonths(date: Date, months: number): Date {
   return result;
 }
 
-async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<number> {
+/** What the account pass produced, for the closing summary. */
+interface SeedTally {
+  businesses: number;
+  catalogProducts: number;
+}
+
+async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
   const featureSeedByKey = new Map(FEATURES.map((entry) => [entry.key, entry]));
-  let businessesSeeded = 0;
+  const tally: SeedTally = { businesses: 0, catalogProducts: 0 };
 
   for (const account of ACCOUNTS) {
     // Users are platform-level: no tenant context, and app_user carries no RLS.
@@ -229,6 +237,10 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     if (planId === undefined) {
       throw new Error(`Unknown plan "${business.planKey}" for ${account.email}.`);
     }
+
+    // Resolved once, before the transactions: it is data, not a write, and the closing
+    // summary reports how many categories each business received.
+    const catalog = DEMO_CATALOGS[business.category];
 
     // Transaction 1 — the tenant itself. The RLS INSERT policy requires the new row's
     // owner_id to be the acting user, so setting the user context is what makes this
@@ -309,6 +321,14 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         });
       }
 
+      // ── Demo catalogue ───────────────────────────────────────────────────────
+      // So no dashboard is ever empty (requirement F). Written with the tenant in context,
+      // like everything else here.
+      if (catalog !== undefined) {
+        const written = await seedCatalog(tx, tenant.id, business.currency, catalog);
+        tally.catalogProducts += written.products;
+      }
+
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
       // createMany with skipDuplicates rather than an upsert, keyed on a deterministic id.
       await tx.auditLog.createMany({
@@ -327,11 +347,14 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
       });
     });
 
-    businessesSeeded += 1;
-    process.stdout.write(`  ${account.email} → ${tenant.slug} (${business.planKey})\n`);
+    tally.businesses += 1;
+    process.stdout.write(
+      `  ${account.email} → ${tenant.slug} (${business.planKey}` +
+        `${catalog === undefined ? '' : `, ${catalog.categories.length} catégories`})\n`,
+    );
   }
 
-  return businessesSeeded;
+  return tally;
 }
 
 async function main(): Promise<void> {
@@ -347,7 +370,7 @@ async function main(): Promise<void> {
 
     const businessTypes = await prisma.businessType.findMany({ select: { id: true, key: true } });
 
-    const businessesSeeded = await seedAccounts(prisma, {
+    const tally = await seedAccounts(prisma, {
       planIdByKey,
       featureIds,
       businessTypeIdByKey: new Map(businessTypes.map((type) => [type.key, type.id])),
@@ -365,7 +388,7 @@ async function main(): Promise<void> {
     // before someone "fixes" this line. The seed's own tally is reported instead.
     process.stdout.write(
       `\nSeed complete: ${plans} plans, ${features} features, ${users} users, ` +
-        `${businessesSeeded} businesses.\n` +
+        `${tally.businesses} businesses, ${tally.catalogProducts} produits de démonstration.\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

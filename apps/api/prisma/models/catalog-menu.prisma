@@ -1,0 +1,259 @@
+// Catalogue, part two: the things that describe and compose a product.
+//
+// Allergens, ingredients, recipes, utensils and options (modifiers). Split from
+// catalog.prisma because these are edited by different people — a kitchen fills in
+// recipes and allergens, a manager prices products and builds the menu.
+
+/// One of the fourteen allergens that must be declared by law.
+///
+/// PLATFORM-LEVEL and therefore not tenant-scoped and not under row-level security: this
+/// is a fixed legal list, identical for every tenant, and a business inventing its own
+/// would produce a declaration that means nothing. `key` is the stable identifier used by
+/// the API and the frontend.
+model Allergen {
+  id String @id @default(cuid())
+
+  key     String  @unique @db.VarChar(64)
+  labelFr String  @map("label_fr") @db.VarChar(120)
+  labelEn String  @map("label_en") @db.VarChar(120)
+  icon    String? @db.VarChar(64)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  products ProductAllergen[]
+
+  @@index([sortOrder])
+  @@map("allergen")
+}
+
+/// Declares an allergen on a product, and how strongly.
+///
+/// "Contains" and "may contain traces of" are different legal statements, which is why
+/// `presence` is a value of its own rather than a boolean.
+model ProductAllergen {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  productId  String @map("product_id")
+  allergenId String @map("allergen_id")
+
+  presence AllergenPresence @default(CONTAINS)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  allergen Allergen @relation(fields: [allergenId], references: [id], onDelete: Restrict)
+
+  /// One declaration per allergen per product.
+  @@unique([productId, allergenId])
+  @@index([businessId])
+  @@index([allergenId])
+  @@map("product_allergen")
+}
+
+/// A raw material: flour, tomatoes, beef. Bought, stocked and consumed by recipes.
+///
+/// A supplier link arrives with the purchasing models, which is the next increment.
+model Ingredient {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name String      @db.VarChar(200)
+  /// The unit the cost and the stock are expressed in.
+  unit ProductUnit @default(KILOGRAM)
+
+  /// Cost of one `unit`. Nullable because it is often unknown when an ingredient is
+  /// created by hand, and a made-up zero would corrupt every margin computed from it.
+  costPerUnit Decimal? @map("cost_per_unit") @db.Decimal(14, 2)
+  currency    String   @default("EUR") @db.Char(3)
+
+  /// How much is lost between buying and serving (peeling, trimming). 1.00 = no loss, so
+  /// the default cannot silently inflate costs.
+  yieldFactor Decimal @default(1) @map("yield_factor") @db.Decimal(5, 3)
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  recipeLines RecipeLine[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("ingredient")
+}
+
+/// Kitchen equipment, so a product's true cost can include what it takes to produce
+/// (a mould, a blender, a specific tray).
+model Utensil {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name       String   @db.VarChar(200)
+  quantity   Int      @default(1)
+  /// Purchase cost, and how many uses it survives — the two together give a cost per use.
+  cost       Decimal? @db.Decimal(14, 2)
+  currency   String   @default("EUR") @db.Char(3)
+  usableUses Int?     @map("usable_uses")
+  notes      String?  @db.Text
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([businessId, name])
+  @@map("utensil")
+}
+
+/// How a product is made — its bill of materials.
+///
+/// One recipe per product, hence the unique `productId`. A recipe for a semi-finished
+/// preparation that is not itself sold is expressed as a sub-recipe line instead.
+model Recipe {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  productId  String @unique @map("product_id")
+
+  name          String?     @db.VarChar(200)
+  /// How much the recipe produces: 10 portions, 2 kg of dough. Without it, the lines
+  /// describe one batch of unknown size and the cost per portion cannot be derived.
+  yieldQuantity Decimal     @default(1) @map("yield_quantity") @db.Decimal(14, 3)
+  yieldUnit     ProductUnit @default(PORTION) @map("yield_unit")
+
+  prepMinutes Int?    @map("prep_minutes")
+  notes       String? @db.Text
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  lines  RecipeLine[] @relation("RecipeLines")
+  /// The recipes that use this one as a component.
+  usedIn RecipeLine[] @relation("SubRecipeLines")
+
+  @@index([businessId, isActive])
+  @@map("recipe")
+}
+
+/// One line of a recipe: an ingredient, or another recipe used as a component.
+///
+/// Exactly one of `ingredientId` / `subRecipeId` must be set. Prisma cannot express that,
+/// so the migration adds a CHECK constraint — the alternative is a line that consumes
+/// nothing, which would quietly understate every cost computed from it.
+model RecipeLine {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  recipeId   String @map("recipe_id")
+
+  ingredientId String? @map("ingredient_id")
+  subRecipeId  String? @map("sub_recipe_id")
+
+  quantity Decimal     @db.Decimal(14, 3)
+  unit     ProductUnit
+
+  sortOrder Int     @default(0) @map("sort_order")
+  notes     String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  recipe     Recipe      @relation("RecipeLines", fields: [recipeId], references: [id], onDelete: Cascade)
+  subRecipe  Recipe?     @relation("SubRecipeLines", fields: [subRecipeId], references: [id], onDelete: Restrict)
+  ingredient Ingredient? @relation(fields: [ingredientId], references: [id], onDelete: Restrict)
+
+  @@index([recipeId, sortOrder])
+  @@index([businessId])
+  @@index([ingredientId])
+  @@map("recipe_line")
+}
+
+/// A set of choices offered with a product — "Cuisson" with three options, "Sauces" with six.
+model ModifierGroup {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name String @db.VarChar(160)
+
+  /// 0 allows "no choice"; isRequired then has nothing to enforce, which is why the two
+  /// are stored separately rather than derived from each other.
+  minSelections Int     @default(0) @map("min_selections")
+  maxSelections Int     @default(1) @map("max_selections")
+  isRequired    Boolean @default(false) @map("is_required")
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business               @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  modifiers Modifier[]
+  products  ProductModifierGroup[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive, sortOrder])
+  @@map("modifier_group")
+}
+
+/// One choice inside a group.
+///
+/// `priceDelta` is a DELTA, unlike a variant's price override, and deliberately so: an
+/// extra cheese is "+1 €" whatever the base dish costs, so a base price change must move
+/// it too. It may be negative for a discount ("sans fromage").
+model Modifier {
+  id              String @id @default(cuid())
+  businessId      String @map("business_id")
+  modifierGroupId String @map("modifier_group_id")
+
+  name       String  @db.VarChar(160)
+  priceDelta Decimal @default(0) @map("price_delta") @db.Decimal(14, 2)
+
+  isDefault Boolean @default(false) @map("is_default")
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  group    ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  @@unique([modifierGroupId, name])
+  @@index([businessId])
+  @@map("modifier")
+}
+
+/// Which option groups a product offers.
+model ProductModifierGroup {
+  id              String @id @default(cuid())
+  businessId      String @map("business_id")
+  productId       String @map("product_id")
+  modifierGroupId String @map("modifier_group_id")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  product  Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  group    ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+
+  /// A group is offered by a product at most once.
+  @@unique([productId, modifierGroupId])
+  @@index([businessId])
+  @@index([modifierGroupId])
+  @@map("product_modifier_group")
+}

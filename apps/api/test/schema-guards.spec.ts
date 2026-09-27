@@ -5,6 +5,7 @@ import { BUSINESS_CATEGORIES, USER_ROLES } from '@chapfoody/types';
 
 import { TENANT_SCOPED_MODELS } from '../src/infra/prisma/tenant-context.js';
 import { ACCOUNTS } from '../prisma/seed/accounts.js';
+import { DEMO_CATALOGS } from '../prisma/seed/catalog-data.js';
 import { FEATURES } from '../prisma/seed/features.js';
 import { BUSINESS_TYPES, PLANS } from '../prisma/seed/plans.js';
 
@@ -150,5 +151,103 @@ describe('seed data', () => {
 
     expect(onFree.length).toBeGreaterThan(0);
     expect(premiumOnly.length).toBeGreaterThan(0);
+  });
+});
+
+describe('demo catalogue data', () => {
+  const catalogs = Object.entries(DEMO_CATALOGS);
+
+  const productsOf = (catalog: (typeof DEMO_CATALOGS)[string]) =>
+    catalog.categories.flatMap((category) => category.products);
+
+  it('is keyed by business types the platform actually offers', () => {
+    const known = new Set(BUSINESS_TYPES.map((type) => type.key));
+
+    expect(catalogs.length).toBeGreaterThan(0);
+    for (const [category] of catalogs) {
+      expect(known).toContain(category);
+    }
+  });
+
+  it('uses each SKU and each slug once per business', () => {
+    for (const [category, catalog] of catalogs) {
+      const skus = productsOf(catalog).map((product) => product.sku);
+      const slugs = catalog.categories.map((entry) => entry.slug);
+
+      expect(new Set(skus).size).toBe(skus.length);
+      expect(new Set(slugs).size).toBe(slugs.length);
+      expect(catalog.categories.length).toBeGreaterThan(0);
+
+      // A SKU that looks like a slug would be a copy-paste slip between the two fields.
+      for (const sku of skus) {
+        expect(sku).toMatch(/^[A-Z]{3,4}-\d{3}$/);
+      }
+
+      void category;
+    }
+  });
+
+  it('formats every amount as a decimal string, never a float', () => {
+    for (const catalog of Object.values(DEMO_CATALOGS)) {
+      for (const product of productsOf(catalog)) {
+        expect(product.price).toMatch(/^\d+\.\d{2}$/);
+
+        if (product.costPrice !== undefined) {
+          expect(product.costPrice).toMatch(/^\d+\.\d{2}$/);
+        }
+      }
+    }
+  });
+
+  it('resolves every recipe line and modifier attachment it names', () => {
+    for (const catalog of Object.values(DEMO_CATALOGS)) {
+      const skus = new Set(productsOf(catalog).map((product) => product.sku));
+      const ingredients = new Set((catalog.ingredients ?? []).map((entry) => entry.name));
+
+      // An unresolved reference is not a crash — the seed throws on it — but finding it
+      // here means the failure arrives while the data is being edited, not on a fresh
+      // database in CI.
+      if (catalog.recipe !== undefined) {
+        expect(skus).toContain(catalog.recipe.productSku);
+
+        for (const line of catalog.recipe.lines) {
+          expect(ingredients).toContain(line.ingredient);
+        }
+      }
+
+      if (catalog.modifierGroup !== undefined) {
+        expect(skus).toContain(catalog.modifierGroup.attachedTo);
+        expect(catalog.modifierGroup.modifiers.length).toBeGreaterThan(0);
+        expect(catalog.modifierGroup.maxSelections).toBeGreaterThanOrEqual(
+          catalog.modifierGroup.minSelections,
+        );
+      }
+    }
+  });
+
+  it('sells services without stock on the partner dashboards', () => {
+    // A delivery has no shelf quantity: seeding stock rows for it would fill an inventory
+    // screen with meaningless zeroes.
+    for (const category of ['livreur', 'societe-livraison', 'affilie']) {
+      const catalog = DEMO_CATALOGS[category];
+      expect(catalog).toBeDefined();
+
+      for (const product of productsOf(catalog as (typeof DEMO_CATALOGS)[string])) {
+        expect(product.trackStock).toBe(false);
+      }
+    }
+  });
+
+  it('gives the food businesses stock-tracked products', () => {
+    for (const category of ['restaurant', 'catering', 'boutiques-supermarche', 'epiceries-fruiteries']) {
+      const catalog = DEMO_CATALOGS[category];
+      expect(catalog).toBeDefined();
+
+      const tracked = productsOf(catalog as (typeof DEMO_CATALOGS)[string]).filter(
+        (product) => product.trackStock !== false,
+      );
+
+      expect(tracked.length).toBeGreaterThan(0);
+    }
   });
 });

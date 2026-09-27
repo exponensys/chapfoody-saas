@@ -84,6 +84,26 @@ model Business {
   paymentMethods    PaymentMethod[]
   platformInvoices  PlatformInvoice[]
 
+  // ── Catalogue ──────────────────────────────────────────────────────────────
+  // Prisma requires the opposite relation on the other side, which is why the tenant
+  // root accumulates a list per domain. Grouped by domain, in schema order, so the block
+  // stays readable as the remaining domains land.
+  productCategories     ProductCategory[]
+  collections           Collection[]
+  collectionProducts    CollectionProduct[]
+  products              Product[]
+  productVariants       ProductVariant[]
+  priceLists            PriceList[]
+  priceListItems        PriceListItem[]
+  productAllergens      ProductAllergen[]
+  ingredients           Ingredient[]
+  utensils              Utensil[]
+  recipes               Recipe[]
+  recipeLines           RecipeLine[]
+  modifierGroups        ModifierGroup[]
+  modifiers             Modifier[]
+  productModifierGroups ProductModifierGroup[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])
