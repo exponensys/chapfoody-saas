@@ -1,0 +1,126 @@
+// The tenant itself, and who belongs to it.
+//
+// Business is the tenant root: every business-owned model in every other domain
+// carries a `businessId` pointing here. business_member is the first table to receive
+// a row-level security policy; see prisma/sql/.
+
+/// A legal category the platform serves — the ten dashboards of requirement B.5.
+///
+/// A table rather than an enum so the super-admin can attach per-category metadata
+/// (plan availability, ordering, labels) without a code change. Its `key` values must
+/// stay in step with @chapfoody/types BUSINESS_CATEGORIES; a seed test asserts it.
+model BusinessType {
+  id String @id @default(cuid())
+
+  /// Slug, identical to the values in @chapfoody/types (e.g. "epiceries-fruiteries").
+  key     String  @unique @db.VarChar(64)
+  labelFr String  @map("label_fr") @db.VarChar(120)
+  labelEn String  @map("label_en") @db.VarChar(120)
+  icon    String? @db.VarChar(64)
+
+  /// The seven "Clients" categories (requirement A.VI) versus the three partner
+  /// profiles (livreur, société de livraison, affilié).
+  isClientCategory Boolean @map("is_client_category")
+  sortOrder        Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  businesses Business[]
+
+  @@index([isClientCategory, sortOrder])
+  @@map("business_type")
+}
+
+/// A tenant. Everything business-owned hangs off this row.
+model Business {
+  id String @id @default(cuid())
+
+  /// Used for the storefront subdomain (requirement C): <slug>.chapfoody.com.
+  /// Globally unique, because DNS is.
+  slug String @unique @db.VarChar(64)
+
+  name           String  @db.VarChar(160)
+  legalName      String? @map("legal_name") @db.VarChar(200)
+  businessTypeId String  @map("business_type_id")
+  ownerId        String  @map("owner_id")
+
+  status BusinessStatus @default(ONBOARDING)
+
+  /// Currency is ISO 4217 rather than an enum: XOF, EUR, USD and CAD have to coexist,
+  /// and opening a new market must not require a migration.
+  currency String @default("EUR") @db.Char(3)
+  locale   Locale @default(FR)
+  timezone String @default("Europe/Paris") @db.VarChar(64)
+
+  country      String  @db.Char(2)
+  city         String? @db.VarChar(120)
+  addressLine1 String? @map("address_line1") @db.VarChar(200)
+  postalCode   String? @map("postal_code") @db.VarChar(32)
+  phone        String? @db.VarChar(32)
+  email        String? @db.VarChar(320)
+  logoUrl      String? @map("logo_url") @db.Text
+
+  /// Default VAT rate for new products. Decimal, never float.
+  defaultVatRate Decimal? @map("default_vat_rate") @db.Decimal(5, 2)
+
+  onboardingCompletedAt DateTime? @map("onboarding_completed_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  businessType BusinessType @relation(fields: [businessTypeId], references: [id], onDelete: Restrict)
+  owner        User         @relation("BusinessOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+
+  members           BusinessMember[]
+  invitations       Invitation[]
+  auditLogs         AuditLog[]
+  subscription      Subscription?
+  subscriptionItems SubscriptionItem[]
+  entitlements      Entitlement[]
+  usageCounters     UsageCounter[]
+  payments          Payment[]
+  paymentMethods    PaymentMethod[]
+  platformInvoices  PlatformInvoice[]
+
+  @@index([businessTypeId])
+  @@index([ownerId])
+  @@index([status])
+  @@index([deletedAt])
+  @@map("business")
+}
+
+/// Membership of a user in a business, with exactly one role.
+///
+/// Why one role rather than a role join table: the RBAC guard resolves a single role
+/// per request, and stacking roles makes least privilege unenforceable in practice —
+/// a cashier who is also a manager is a manager. OWNER and MANAGER act as supersets.
+model BusinessMember {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  userId     String @map("user_id")
+
+  role   RoleKey
+  status MemberStatus @default(ACTIVE)
+
+  /// The creator's membership; cannot be removed while the business exists.
+  isOwner Boolean @default(false) @map("is_owner")
+
+  invitedById  String?   @map("invited_by_id")
+  joinedAt     DateTime? @map("joined_at")
+  lastActiveAt DateTime? @map("last_active_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitedBy User?    @relation("MemberInviter", fields: [invitedById], references: [id], onDelete: SetNull)
+
+  /// One membership per user per business — a tenant-scoped unique key, not a global one.
+  @@unique([businessId, userId])
+  @@index([userId])
+  @@index([businessId, status])
+  @@map("business_member")
+}

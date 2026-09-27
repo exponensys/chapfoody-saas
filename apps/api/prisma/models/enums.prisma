@@ -1,0 +1,162 @@
+// Shared enumerations.
+//
+// Kept in one file because several domains use them (a currency appears on
+// businesses, plans, payments and orders) and duplicating an enum per domain would
+// let the values drift.
+
+/// Interface language. French is the product default; English is the second locale.
+enum Locale {
+  FR
+  EN
+
+  @@map("locale")
+}
+
+// ── Identity ─────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  /// Asked for deletion; retained only as long as the law requires.
+  DELETED
+
+  @@map("user_status")
+}
+
+/// External identity providers. Google is required by A.V / A.VI; the enum is here
+/// so that adding Apple or Facebook later is not a schema surprise.
+enum AuthProvider {
+  GOOGLE
+
+  @@map("auth_provider")
+}
+
+enum VerificationPurpose {
+  EMAIL_VERIFY
+  PASSWORD_RESET
+  MFA_RESET
+  INVITATION
+
+  @@map("verification_purpose")
+}
+
+/// The role vocabulary, mirrored by @chapfoody/types USER_ROLES.
+/// Keep the two in step: a seed test asserts they match.
+enum RoleKey {
+  /// Platform staff. The only role that may reach /admin (requirement D).
+  SUPER_ADMIN
+  /// Owner of a client business.
+  OWNER
+  MANAGER
+  CASHIER
+  VENDOR
+  ACCOUNTANT
+
+  @@map("role_key")
+}
+
+enum BusinessStatus {
+  /// Signed up, still completing the onboarding wizard (M6).
+  ONBOARDING
+  ACTIVE
+  /// Suspended by the super-admin, or for non-payment.
+  SUSPENDED
+  CLOSED
+
+  @@map("business_status")
+}
+
+enum MemberStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+
+  @@map("member_status")
+}
+
+enum InvitationStatus {
+  PENDING
+  ACCEPTED
+  EXPIRED
+  REVOKED
+
+  @@map("invitation_status")
+}
+
+/// Who caused an audited action. `SYSTEM` covers jobs and integrations, `ADMIN`
+/// covers super-admin impersonation (requirement D).
+enum ActorType {
+  USER
+  SYSTEM
+  ADMIN
+
+  @@map("actor_type")
+}
+
+// ── Subscription and premium access ──────────────────────────────────────────
+
+enum BillingPeriod {
+  MONTHLY
+  YEARLY
+
+  @@map("billing_period")
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  /// Payment failed; access continues during the grace period.
+  PAST_DUE
+  CANCELED
+  EXPIRED
+
+  @@map("subscription_status")
+}
+
+/// A feature is either on/off or metered. Requirement B.13 gates features; quotas
+/// additionally cap usage (SMS sent, storefront pages).
+enum FeatureKind {
+  FLAG
+  QUOTA
+
+  @@map("feature_kind")
+}
+
+/// Where a business's access to a feature came from, kept for support and billing.
+enum EntitlementSource {
+  PLAN
+  ADDON
+  OVERRIDE
+  TRIAL
+
+  @@map("entitlement_source")
+}
+
+enum PaymentProvider {
+  STRIPE
+  CINETPAY
+  PAYSTACK
+  FLUTTERWAVE
+  /// Bank transfer or cash recorded by an administrator.
+  MANUAL
+
+  @@map("payment_provider")
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  REFUNDED
+
+  @@map("payment_status")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  OPEN
+  PAID
+  VOID
+
+  @@map("invoice_status")
+}

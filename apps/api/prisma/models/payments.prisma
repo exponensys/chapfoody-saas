@@ -1,0 +1,99 @@
+// Platform billing: what a business pays the platform for its subscription.
+//
+// Not to be confused with the client's own customers paying the client — that is the
+// sales/POS domain, which arrives in the next increment.
+
+/// A stored payment instrument for a business.
+///
+/// Card data never touches this database: only the provider's token and the last four
+/// digits, which is all that is needed to render "Visa •••• 4242".
+model PaymentMethod {
+  id         String          @id @default(cuid())
+  businessId String          @map("business_id")
+  provider   PaymentProvider
+
+  /// Provider-side identifier (Stripe `pm_…`). Never a card number.
+  externalId String @map("external_id") @db.VarChar(160)
+
+  brand    String? @db.VarChar(32)
+  last4    String? @db.Char(4)
+  expMonth Int?    @map("exp_month")
+  expYear  Int?    @map("exp_year")
+
+  isDefault Boolean @default(false) @map("is_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, externalId])
+  @@index([businessId])
+  @@map("payment_method")
+}
+
+/// One payment attempt. Attempts are kept even when they fail: a dunning run and a
+/// support conversation both need the history.
+model Payment {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  subscriptionId String? @map("subscription_id")
+  invoiceId      String? @map("invoice_id")
+
+  provider PaymentProvider
+  status   PaymentStatus   @default(PENDING)
+
+  /// Provider reference, also used as the idempotency key for webhook replays.
+  externalId String? @map("external_id") @db.VarChar(160)
+
+  amount    Decimal  @db.Decimal(14, 2)
+  currency  String   @db.Char(3)
+  /// What the provider kept, so reconciliation can be automated.
+  feeAmount Decimal? @map("fee_amount") @db.Decimal(14, 2)
+
+  failureReason String?   @map("failure_reason") @db.VarChar(200)
+  paidAt        DateTime? @map("paid_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business         @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  subscription Subscription?    @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+  invoice      PlatformInvoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, createdAt])
+  @@index([status])
+  @@index([externalId])
+  @@map("payment")
+}
+
+/// An invoice issued by the platform to a business.
+model PlatformInvoice {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Human-readable, gapless per year. Unique across the platform.
+  number String @unique @db.VarChar(32)
+
+  status InvoiceStatus @default(DRAFT)
+
+  amountDue  Decimal @map("amount_due") @db.Decimal(14, 2)
+  amountPaid Decimal @default(0) @map("amount_paid") @db.Decimal(14, 2)
+  currency   String  @db.Char(3)
+
+  issuedAt DateTime? @map("issued_at")
+  dueAt    DateTime? @map("due_at")
+  paidAt   DateTime? @map("paid_at")
+  pdfUrl   String?   @map("pdf_url") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business  @relation(fields: [businessId], references: [id], onDelete: Restrict)
+  payments Payment[]
+
+  @@index([businessId, status])
+  @@index([dueAt])
+  @@map("platform_invoice")
+}

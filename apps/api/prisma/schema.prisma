@@ -1,38 +1,68 @@
-// Chapfoody — Prisma schema (Prisma 7).
+// ═════════════════════════════════════════════════════════════════════════════
+// Chapfoody — main schema file.
 //
-// SCOPE (implementation plan §6):
-//   M1 — generator + datasource only. Enough for a working PrismaClient for the
-//        database health probe, and to settle the connection strategy before the
-//        first query is written.
-//   M2 — the full domain schema (identity, tenancy, subscriptions, catalog,
-//        inventory, orders, POS, accounting, HR, delivery, affiliate, marketing,
-//        content, storefront), the RLS policies, the migrations and the seed.
+// Holds the generator and the datasource; the models live in `models/`, grouped by
+// domain. Prisma requires this file (the one with the `generator` block) to sit in
+// the directory `prisma.config.ts` points at, with `migrations/` beside it.
 //
-// WHY THIS FILE LIVES UNDER apps/api
-//   Prisma 7 requires a `prisma.config.ts` next to the package that declares the
-//   `prisma` dependency, and it validates that layout. Keeping the schema beside
-//   the API that owns it follows the documented convention and avoids path
-//   gymnastics in every command. See the API README for the note recorded against
-//   the repository layout in the implementation plan.
+// ── CONVENTIONS (apply to every model, without exception) ─────────────────────
+//
+//  NAMES
+//   • Models: PascalCase singular, mapped to snake_case tables with @@map.
+//   • Fields: camelCase in Prisma, mapped to snake_case columns with @map.
+//     This is not decoration: it means hand-written SQL — every RLS policy, every
+//     report query — reads `business_id` instead of `"businessId"`, and quoted
+//     identifiers stop being a source of bugs.
+//   • Enums: PascalCase values mapped to snake_case Postgres types.
+//
+//  IDENTITY
+//   • `id String @id @default(cuid())`. Not auto-increment: sequential ids leak
+//     volume and let a competitor enumerate customers. Not uuid: cuid is the same
+//     opacity with better index locality.
+//
+//  TIMESTAMPS
+//   • `createdAt DateTime @default(now())` and `updatedAt DateTime @updatedAt` on
+//     everything. Soft delete (`deletedAt DateTime?`) only where history matters.
+//
+//  MONEY AND QUANTITIES — never Float
+//   • Money: `Decimal @db.Decimal(14, 2)`. Binary floating point cannot represent
+//     0.10 exactly, and this schema carries invoices, VAT and payroll.
+//   • Quantities: `Decimal @db.Decimal(14, 3)` (grams, litres, halves).
+//   • Currency: `String @db.Char(3)`, ISO 4217. A Postgres enum would need a
+//     migration per market, and XOF/EUR/USD/CAD all have to coexist.
+//
+//  MULTI-TENANCY (see prisma/sql/ and the tenant scoping extension)
+//   • Every business-owned model carries `businessId` + a relation + @@index, and
+//     includes it in every unique constraint that would otherwise be global.
+//   • Those tables get row-level security in a SQL migration. The policy fails
+//     closed: with no tenant context, `current_setting('app.business_id', true)` is
+//     NULL and no row matches.
+//   • Platform-level models (User, Role, Plan, …) are NOT tenant-scoped and are not
+//     under RLS; access is controlled by the API's own authorization.
+//
+//  DELETION
+//   • `onDelete: Cascade` where the child cannot outlive the parent (order lines).
+//   • `onDelete: Restrict` where deleting the parent would lose meaning (a business's
+//     invoices must not vanish with it) — the safe default for financial records.
+// ═════════════════════════════════════════════════════════════════════════════
 
 generator client {
   provider = "prisma-client"
 
-  // REQUIRED in Prisma 7. Inside `src/` on purpose: the API compiles with
-  // `rootDir: src`, so a client generated outside it could not be imported without
-  // producing "file is not under rootDir" errors. tsc compiles the generated
-  // TypeScript along with the application code.
+  // Inside `src/` on purpose: the API compiles with `rootDir: src`, so a client
+  // generated outside it could not be imported without "file is not under rootDir"
+  // errors. tsc compiles the generated TypeScript along with the application code.
   output = "../src/generated/prisma"
 }
 
 datasource db {
   provider = "postgresql"
 
-  // No `url` / `directUrl` here: Prisma 7 moved connection URLs to
-  // prisma.config.ts, and removed the schema-level `directUrl` entirely.
-  // The pooled/direct split is therefore expressed like this:
-  //   - PrismaClient at runtime → POOLED url, passed through the pg driver adapter
-  //     in PrismaService (apps/api/src/infra/prisma/prisma.service.ts)
-  //   - Prisma CLI (migrate, studio) → DIRECT url, from prisma.config.ts
-  // See apps/api/.env.example for the required connection parameters.
+  // No `url` / `directUrl` here: Prisma 7 moved connection URLs to prisma.config.ts,
+  // and removed the schema-level `directUrl` entirely. The pooled/direct split is
+  // expressed like this:
+  //   - PrismaClient at runtime → DATABASE_URL, through the pg driver adapter
+  //     in apps/api/src/infra/prisma/prisma.service.ts (must be a NOBYPASSRLS role)
+  //   - Prisma CLI (migrate, studio) → DIRECT_URL, from prisma.config.ts
+  // See apps/api/.env.example and prisma/sql/app-role.sql.
 }

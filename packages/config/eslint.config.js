@@ -55,6 +55,29 @@ export default tseslint.config(
     },
   },
 
+  // Plain JavaScript entrypoints — `prisma/sql/*.mjs` helpers and the like — run in
+  // Node. ESLint's recommended set enables `no-undef` but declares no globals, and the
+  // TypeScript override that switches `no-undef` off does not apply to `.mjs`, so without
+  // this every `process` reference is an error.
+  {
+    files: ['**/*.mjs', '**/*.cjs'],
+    languageOptions: {
+      globals: {
+        Buffer: 'readonly',
+        URL: 'readonly',
+        __dirname: 'readonly',
+        __filename: 'readonly',
+        clearTimeout: 'readonly',
+        console: 'readonly',
+        module: 'readonly',
+        process: 'readonly',
+        require: 'readonly',
+        setImmediate: 'readonly',
+        setTimeout: 'readonly',
+      },
+    },
+  },
+
   // Tests may use non-null assertions and dynamic typing freely.
   {
     files: [

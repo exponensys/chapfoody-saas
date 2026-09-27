@@ -1,4 +1,21 @@
+import { existsSync } from 'node:fs';
+
 import { defineConfig } from 'prisma/config';
+
+/**
+ * Load apps/api/.env.local before anything reads the environment.
+ *
+ * The Prisma CLI auto-loads `.env` but not `.env.local`, and our convention is
+ * `.env.local` — without this, `prisma migrate` would silently fall back to the
+ * unroutable placeholder below and report "can't reach database server at 127.0.0.1:1",
+ * which looks like a database problem rather than a configuration one.
+ *
+ * Node's own loader is used rather than adding `dotenv` as a dependency, matching the
+ * `--env-file-if-exists=.env.local` flag the application's scripts already pass.
+ */
+if (existsSync('.env.local')) {
+  process.loadEnvFile('.env.local');
+}
 
 /**
  * Prisma 7 CLI configuration.
@@ -14,12 +31,13 @@ import { defineConfig } from 'prisma/config';
  *                               Migrations take session-level advisory locks and
  *                               run DDL, which transaction-mode PgBouncer pooling
  *                               cannot provide. Over the pooler a migration hangs
- *                               or fails.
+ *                               or fails. Locally this is the schema owner.
  *
- *   DATABASE_URL (runtime)    → the application. POOLED (host contains "-pooler"),
- *                               consumed by PrismaService through the pg driver
- *                               adapter, because serverless runtimes open a
- *                               connection per invocation.
+ *   DATABASE_URL (runtime)    → the application. POOLED in production (host contains
+ *                               "-pooler"); consumed by PrismaService through the pg
+ *                               driver adapter. It must be a NON-superuser,
+ *                               NOBYPASSRLS role, otherwise row-level security is
+ *                               silently ignored — see prisma/sql/app-role.sql.
  *
  * ── Why a placeholder fallback exists ────────────────────────────────────────
  * `prisma generate` and `prisma validate` never open a connection, and they run in
@@ -35,11 +53,14 @@ const UNROUTABLE_PLACEHOLDER = 'postgresql://prisma-config:placeholder@127.0.0.1
 const directUrl = process.env.DIRECT_URL ?? process.env.DATABASE_URL ?? UNROUTABLE_PLACEHOLDER;
 
 export default defineConfig({
-  schema: 'prisma/schema.prisma',
+  // A FOLDER: the schema is split by domain (see prisma/models/*.prisma).
+  // Prisma requires `schema.prisma` — the file holding the generator block — to sit
+  // in this directory, with `migrations/` beside it. Domain files live in `models/`.
+  schema: 'prisma',
 
   migrations: {
     path: 'prisma/migrations',
-    // The seed script arrives with the domain schema in M2.
+    seed: 'tsx prisma/seed.ts',
   },
 
   datasource: {

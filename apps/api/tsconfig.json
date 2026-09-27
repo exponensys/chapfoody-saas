@@ -32,11 +32,12 @@
     // class-validator rely on. Nest's own starter config keeps it off.
     "useDefineForClassFields": false
   },
-  // `test/**` is included so the e2e specs are typechecked too; the build
-  // config (tsconfig.build.json) narrows this to `src` only.
-  // `**/*.d.ts` is listed explicitly: ambient declarations such as the Express
-  // request augmentation in src/types/express.d.ts must be in the program for the
-  // augmented properties to resolve.
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  // `test/**` is included so the e2e specs are typechecked too; the build config
+  // (tsconfig.build.json) narrows this to `src` only. `prisma/**` holds the seed and its
+  // data modules — real code that must compile, even though nothing imports it at runtime.
+  // `**/*.d.ts` is listed explicitly: ambient declarations such as the Express request
+  // augmentation in src/types/express.d.ts must be in the program for the augmented
+  // properties to resolve.
+  "include": ["src/**/*.ts", "test/**/*.ts", "prisma/**/*.ts"],
   "exclude": ["dist", "node_modules"]
 }

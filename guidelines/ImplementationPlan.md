@@ -478,31 +478,65 @@ document was exported to `packages/api-client/openapi.json`.
 
 ---
 
-### M2 — Database schema, RLS and seed `[ ]`
+### M2 — Database schema, RLS and seed `[~]`
 
 **Maps to**: F, plus the data foundation of B. **Depends on**: M1.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
+**Avancement (increment 1/N)** — Identity/tenancy and subscription/premium are done and verified on a real
+PostgreSQL: 22 tables, 16 enum types, three migrations (schema, tenant key, RLS), 13 tenant-isolation integration
+tests and 12 schema/seed guards, all green. The remaining twelve domain groups are still to write; they copy the
+pattern established here (see `apps/api/prisma/models/` and the conventions block at the top of
+`prisma/schema.prisma`).
+
+Recorded deviations from the model list in section 5.2, each deliberate:
+
+- No `UserRole` and no `Role` table. A tenant role lives on `BusinessMember.role` (one role per business, never
+  null), platform staff carry `User.platformRole`, and the `RoleKey` enum is mirrored by `@chapfoody/types
+  USER_ROLES`. A nullable `businessId` in a unique key would not constrain anything — PostgreSQL treats NULLs as
+  distinct — and a table existing only to hold French labels would be worse than the i18n file that already does.
+- Two context variables beyond the plan's `app.business_id`: `app.user_id`, because signing in must read
+  membership *before* a tenant is chosen, and `app.invitation_token`, so an invitee can read exactly one
+  invitation pre-authentication. Without them those flows cannot work under RLS at all.
+- `TenantGuard` is deferred to M3. A guard needs an authenticated request to read a session from, and M3 is what
+  creates sessions; the mechanism it would enforce (RLS plus the Prisma `$extends` scoping) is in place and
+  tested now.
+
 **Tâches**
 1. Write `prisma/schema.prisma` domain by domain — one PR per domain group, each carrying its own migration.
-2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table.
-3. Enable RLS policies in a dedicated SQL migration; add the `SET LOCAL app.business_id` helper; implement the Prisma
-   `$extends` scoping and the `TenantGuard`.
+   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Two groups done; twelve to go.
+2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[~]`
+   Done for the tables that exist. Enforced for every future table by two tests: the RLS-coverage query in
+   `test/tenant-isolation.integration-spec.ts` and the schema-vs-list check in `test/schema-guards.spec.ts`.
+3. Enable RLS policies in a dedicated SQL migration; add the `SET LOCAL app.business_id` helper; implement the
+   Prisma `$extends` scoping and the `TenantGuard`. `[~]` RLS, the transaction-local helper (ADR-0001, follow-up 1)
+   and the scoping extension are done and tested. `TenantGuard` moves to M3, with the reason above.
+   A least-privilege database role (`NOSUPERUSER NOBYPASSRLS`) was added as well — without it PostgreSQL exempts
+   the application from every policy, so the isolation tests would have passed while proving nothing.
 4. `prisma/seed.ts`: plans (Free / Standard / Premium), the `Feature` registry, the accounts of section 5.4, one
-   business per client account, and a demo catalog + stock + orders per business.
-5. Wire `prisma migrate` into CI; remove `db push` from every script except local development.
-6. Generate and commit the ERD into `docs/`, kept current by a CI check.
-7. Delete the Supabase/Hono KV stub and the unused `@jsr/supabase__supabase-js` dependency (ADR follow-up 4).
+   business per client account, and a demo catalog + stock + orders per business. `[~]` Plans, the 39-feature
+   registry, the 8 accounts, 7 businesses with memberships, subscriptions and resolved entitlements are seeded
+   idempotently. The demo catalog, stock and orders wait for the catalog and sales domains to exist.
+5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
+   migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
+   There was never a `db push` script to remove.
+6. Generate and commit the ERD into `docs/`, kept current by a CI check. `[ ]` Deferred until the schema is complete:
+   an ERD of a third of the domains is a diagram that has to be redrawn, not a deliverable.
+7. Delete the Supabase/Hono KV stub and the unused `@jsr/supabase__supabase-js` dependency (ADR follow-up 4). `[x]`
+   Already gone with M0: no active manifest or source file references Supabase, Hono or `@jsr`. The dependency
+   survives only inside the frozen `legacy/` snapshot, where it must.
 
 **Livrables** — migrations applied to the Neon dev branch, seeded data, ERD, RLS proof tests.
 
 **Definition of Done** — `pnpm db:reset && pnpm db:seed` reproduces a fully working dataset from scratch on a clean
-branch, and the RLS proof tests pass.
+branch, and the RLS proof tests pass. `[~]` Reproduced on a local PostgreSQL 18; the Neon dev branch is still to be
+created (runbook step 1). Note that `db:reset`/`db:seed` script aliases are not yet defined in `apps/api/package.json`.
 
-**Tests (TDD)** — integration only: (a) with business A's context, no query can read business B's rows;
-(b) unique constraints behave per tenant; (c) the seed is idempotent when run twice; (d) all eight accounts
-authenticate against the seeded credentials.
+**Tests (TDD)** — integration only: (a) with business A's context, no query can read business B's rows; `[x]`
+(b) unique constraints behave per tenant; `[x]` (c) the seed is idempotent when run twice; `[x]` (d) all eight accounts
+authenticate against the seeded credentials. `[ ]` — (d) needs the Argon2id verifier from M3; the hashes it will
+verify are already correct (`$argon2id$v=19$m=19456,t=2,p=1$…`).
 
 **Risques** — schema churn later → every domain PR must include its migration and a rollback note; merging a schema
 change without a migration is forbidden by review.

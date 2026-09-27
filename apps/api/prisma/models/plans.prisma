@@ -1,0 +1,105 @@
+// Premium access, part 1: the feature registry and the plans the super-admin builds.
+//
+// Requirement B.13 — a client must not reach the CRUD of a feature its subscription
+// does not allow. `Feature.key` is the string that ties the three sides together:
+// the API's @RequiresFeature() decorator, the resolved Entitlement row, and the
+// frontend's premium gate. It is therefore a contract, not a label.
+
+/// The registry of every gated capability.
+model Feature {
+  id String @id @default(cuid())
+
+  /// Dotted and stable: 'marketing.campaigns', 'storefront.customDomain', 'vendeurs'.
+  /// Renaming a key is a breaking change; adding one is not.
+  key String @unique @db.VarChar(96)
+
+  labelFr     String  @map("label_fr") @db.VarChar(160)
+  labelEn     String  @map("label_en") @db.VarChar(160)
+  description String? @db.Text
+
+  /// Grouping for the pricing page and the admin plan builder: 'marketing',
+  /// 'storefront', 'reports', 'pos'…
+  category String @db.VarChar(64)
+
+  kind      FeatureKind @default(FLAG)
+  /// Only meaningful for QUOTA features: what the quota counts ('sms.sent', 'pages').
+  quotaUnit String?     @map("quota_unit") @db.VarChar(48)
+
+  /// BusinessType keys the feature applies to. An empty array means "every category".
+  /// Ingredients, for instance, apply to restaurants, catering and producers but not
+  /// to bars or grocery stores. Kept as an array rather than a join table because it
+  /// is a filter list with no attributes of its own; a seed test asserts every entry is
+  /// a real BusinessType key.
+  appliesToCategories String[] @map("applies_to_categories")
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  planFeatures      PlanFeature[]
+  entitlements      Entitlement[]
+  usageCounters     UsageCounter[]
+  subscriptionItems SubscriptionItem[]
+
+  @@index([category, sortOrder])
+  @@map("feature")
+}
+
+/// A subscription plan. Created and edited by the super-admin (requirement D).
+model Plan {
+  id String @id @default(cuid())
+
+  /// Stable slug used by the seed and by code: 'free', 'standard', 'premium'.
+  key         String  @unique @db.VarChar(48)
+  name        String  @db.VarChar(120)
+  description String? @db.Text
+
+  /// Decimal, never float: this is money.
+  price         Decimal       @db.Decimal(14, 2)
+  currency      String        @default("EUR") @db.Char(3)
+  billingPeriod BillingPeriod @default(MONTHLY) @map("billing_period")
+
+  trialDays Int @default(0) @map("trial_days")
+
+  /// BusinessType keys this plan is offered to. Empty means "all categories".
+  availableForCategories String[] @map("available_for_categories")
+
+  isActive  Boolean @default(true) @map("is_active")
+  /// Hidden plans are offered to specific clients without appearing on the pricing page.
+  isPublic  Boolean @default(true) @map("is_public")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  features      PlanFeature[]
+  subscriptions Subscription[]
+
+  @@index([isActive, sortOrder])
+  @@map("plan")
+}
+
+/// Which features a plan includes, and with what allowance.
+model PlanFeature {
+  id        String @id @default(cuid())
+  planId    String @map("plan_id")
+  featureId String @map("feature_id")
+
+  /// A plan may include a feature switched off by default (an upsell).
+  enabled Boolean @default(true)
+
+  /// For QUOTA features: the allowance included in this plan. Null for FLAG features.
+  quota Int?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  plan    Plan    @relation(fields: [planId], references: [id], onDelete: Cascade)
+  feature Feature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  /// A feature is listed at most once per plan — the tenant-scoped key of this table.
+  @@unique([planId, featureId])
+  @@index([featureId])
+  @@map("plan_feature")
+}

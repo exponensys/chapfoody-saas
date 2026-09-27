@@ -1,0 +1,130 @@
+// Premium access, part 2: subscriptions, the resolved entitlements the API enforces,
+// and metered usage.
+
+/// A business's subscription. Exactly one per business.
+model Subscription {
+  id String @id @default(cuid())
+
+  /// Unique: one active subscription per tenant. Plan changes update this row rather
+  /// than creating a new one, so history lives in AuditLog and Payment.
+  businessId String @unique @map("business_id")
+  planId     String @map("plan_id")
+
+  status SubscriptionStatus @default(TRIALING)
+
+  startedAt          DateTime  @map("started_at")
+  currentPeriodStart DateTime  @map("current_period_start")
+  currentPeriodEnd   DateTime  @map("current_period_end")
+  trialEndsAt        DateTime? @map("trial_ends_at")
+
+  canceledAt   DateTime? @map("canceled_at")
+  cancelReason String?   @map("cancel_reason") @db.VarChar(200)
+
+  /// While payment fails, access continues until this moment (dunning).
+  graceEndsAt DateTime? @map("grace_ends_at")
+
+  /// Provider-side identifier (Stripe subscription id, CinetPay token…).
+  provider   PaymentProvider? @map("provider_name")
+  externalId String?          @map("external_id") @db.VarChar(160)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  plan     Plan     @relation(fields: [planId], references: [id], onDelete: Restrict)
+
+  items    SubscriptionItem[]
+  payments Payment[]
+
+  @@index([planId])
+  // The query that drives renewal reminders and expiry: status in a window.
+  @@index([status, currentPeriodEnd])
+  @@map("subscription")
+}
+
+/// Add-ons purchased on top of a plan (extra SMS pack, extra storefront page).
+model SubscriptionItem {
+  id             String  @id @default(cuid())
+  subscriptionId String  @map("subscription_id")
+  featureId      String? @map("feature_id")
+
+  /// Denormalised tenant key. Every business-scoped table carries it — including
+  /// children reachable through a parent — because a row-level security policy can only
+  /// reference columns on its own row. Without it this table could not be protected.
+  businessId String @map("business_id")
+
+  description String  @db.VarChar(200)
+  quantity    Int     @default(1)
+  unitPrice   Decimal @map("unit_price") @db.Decimal(14, 2)
+  currency    String  @db.Char(3)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  subscription Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  feature      Feature?     @relation(fields: [featureId], references: [id], onDelete: SetNull)
+  business     Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  @@index([subscriptionId])
+  @@index([businessId])
+  @@index([featureId])
+  @@map("subscription_item")
+}
+
+/// The resolved answer to "may this business use this feature?".
+///
+/// Written whenever the subscription changes, read on every gated request (and cached
+/// in Redis from M10). This is the single source of truth the API's entitlement guard
+/// consults — the frontend never decides.
+model Entitlement {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  featureId  String @map("feature_id")
+
+  enabled Boolean
+
+  /// For QUOTA features: the allowance currently granted.
+  quota Int?
+
+  source EntitlementSource @default(PLAN)
+
+  /// Trials and manual overrides must lapse on their own, without anyone remembering.
+  expiresAt DateTime? @map("expires_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  feature  Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  /// One entitlement per feature per business.
+  @@unique([businessId, featureId])
+  @@index([featureId])
+  @@map("entitlement")
+}
+
+/// Metered usage per feature and billing period.
+///
+/// Separate from Entitlement on purpose: the allowance changes when the plan changes,
+/// while usage must survive that change so a mid-period upgrade cannot reset it.
+model UsageCounter {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  featureId  String @map("feature_id")
+
+  periodStart DateTime @map("period_start")
+  periodEnd   DateTime @map("period_end")
+
+  used Int @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  feature  Feature  @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  /// One counter per feature per period.
+  @@unique([businessId, featureId, periodStart])
+  @@index([businessId, periodEnd])
+  @@map("usage_counter")
+}

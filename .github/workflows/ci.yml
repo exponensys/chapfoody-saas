@@ -127,9 +127,38 @@ jobs:
       - name: Build (also generates the Prisma client)
         run: pnpm --filter @chapfoody/api build
 
-      - name: Run integration tests
+      # Migrations run as the OWNER (the service container's superuser). `migrate deploy`
+      # only applies committed migrations — it never generates one — which is what makes
+      # it safe here and why `db push` is banned outside local development.
+      - name: Apply migrations
         env:
-          INTEGRATION_DATABASE_URL: postgresql://chapfoody:chapfoody@localhost:5432/chapfoody
+          DIRECT_URL: postgresql://chapfoody:chapfoody@localhost:5432/chapfoody
+        run: pnpm --filter @chapfoody/api exec prisma migrate deploy
+
+      # Fails if a migration is missing, unapplied, or if the database drifted from the
+      # schema. Catches the classic mistake of editing the schema without migrating.
+      - name: Verify migration state
+        env:
+          DIRECT_URL: postgresql://chapfoody:chapfoody@localhost:5432/chapfoody
+        run: pnpm --filter @chapfoody/api exec prisma migrate status
+
+      # The application role exists so that row-level security actually applies: the
+      # container's user is a superuser, and PostgreSQL exempts superusers from every
+      # policy. The tenant isolation suite asserts this and refuses to run otherwise.
+      - name: Create the least-privilege application role
+        run: |
+          PGPASSWORD=chapfoody psql -h localhost -U chapfoody -d chapfoody \
+            -v app_role_password="'ci-app-password'" \
+            -f apps/api/prisma/sql/app-role.sql
+
+      - name: Seed the database
+        env:
+          DATABASE_URL: postgresql://chapfoody_app:ci-app-password@localhost:5432/chapfoody
+        run: pnpm --filter @chapfoody/api exec prisma db seed
+
+      - name: Run integration tests (as the application role)
+        env:
+          INTEGRATION_DATABASE_URL: postgresql://chapfoody_app:ci-app-password@localhost:5432/chapfoody
           INTEGRATION_REDIS_URL: redis://localhost:6379
         run: pnpm --filter @chapfoody/api test:integration
 

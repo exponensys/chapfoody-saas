@@ -1,0 +1,149 @@
+// Identity — who a person is, and how they are recognised on return.
+//
+// Platform-level models: not tenant-scoped, not under RLS. A user must be readable
+// before any tenant context exists, because establishing that context is what signing
+// in does. Access is controlled by the API's own authorization.
+//
+// Business-scoped records (membership, invitations, audit) live in tenancy.prisma and
+// DO live under row-level security.
+
+/// A person who can sign in: platform staff, a business owner, or an employee.
+/// One user may belong to several businesses — see BusinessMember.
+model User {
+  id String @id @default(cuid())
+
+  /// Always stored lower-cased. The API normalises at the boundary, which is what
+  /// makes this unique index genuinely case-insensitive.
+  email           String    @unique @db.VarChar(320)
+  emailVerifiedAt DateTime? @map("email_verified_at")
+
+  /// Null for accounts created through Google only. Argon2id hash (M3).
+  passwordHash       String? @map("password_hash")
+  /// Seeded and admin-created accounts must rotate their password on first sign-in.
+  mustChangePassword Boolean @default(false) @map("must_change_password")
+
+  firstName String  @map("first_name") @db.VarChar(120)
+  lastName  String  @map("last_name") @db.VarChar(120)
+  phone     String? @db.VarChar(32)
+  avatarUrl String? @map("avatar_url") @db.Text
+  locale    Locale  @default(FR)
+
+  status UserStatus @default(ACTIVE)
+
+  /// Platform staff only; the API treats a set value as SUPER_ADMIN.
+  /// There is deliberately no UserRole table: a tenant role belongs on BusinessMember,
+  /// where it is scoped to exactly one business and can never be null (a nullable key
+  /// would defeat the unique constraint, since PostgreSQL treats NULLs as distinct).
+  platformRole RoleKey? @map("platform_role")
+
+  lastLoginAt         DateTime? @map("last_login_at")
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  /// Set by the lockout policy after repeated failures.
+  lockedUntil         DateTime? @map("locked_until")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+  deletedAt DateTime? @map("deleted_at")
+
+  accounts            Account[]
+  sessions            Session[]
+  mfaSecret           MfaSecret?
+  recoveryCodes       RecoveryCode[]
+  verificationTokens  VerificationToken[]
+  ownedBusinesses     Business[]          @relation("BusinessOwner")
+  memberships         BusinessMember[]
+  invitedMembers      BusinessMember[]    @relation("MemberInviter")
+  sentInvitations     Invitation[]        @relation("InvitationSender")
+  acceptedInvitations Invitation[]        @relation("InvitationAcceptor")
+  auditLogs           AuditLog[]
+
+  @@index([status])
+  @@index([platformRole])
+  @@index([deletedAt])
+  // `app_user`, not `user`: "user" is reserved in PostgreSQL, so raw SQL — every RLS
+  // policy, every report — would otherwise have to quote the table name everywhere.
+  @@map("app_user")
+}
+
+/// A linked external identity. One row per provider per user.
+model Account {
+  id                String       @id @default(cuid())
+  userId            String       @map("user_id")
+  provider          AuthProvider
+  providerAccountId String       @map("provider_account_id") @db.VarChar(255)
+
+  /// Tokens are encrypted at rest by the API and never logged.
+  accessToken  String?   @map("access_token") @db.Text
+  refreshToken String?   @map("refresh_token") @db.Text
+  expiresAt    DateTime? @map("expires_at")
+  scope        String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// A provider account can be linked to only one user.
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("account")
+}
+
+/// A signed-in device. Sessions are what a user revokes in Settings (requirement A.V).
+model Session {
+  id     String @id @default(cuid())
+  userId String @map("user_id")
+
+  /// The business this session currently operates in. Nullable: a user may belong to
+  /// several businesses, and platform staff belong to none.
+  businessId String? @map("business_id")
+
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent") @db.Text
+
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  /// 'logout', 'refresh_reuse', 'admin', 'password_change'.
+  revokedReason String?   @map("revoked_reason") @db.VarChar(64)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  refreshTokens RefreshToken[]
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("session")
+}
+
+/// One rotating refresh token per issuance.
+///
+/// `familyId` ties a chain of rotations together, so that detecting reuse of an
+/// already-rotated token revokes the whole chain — the standard defence against a
+/// stolen refresh token.
+model RefreshToken {
+  id        String @id @default(cuid())
+  sessionId String @map("session_id")
+
+  /// SHA-256 of the token. The raw token is never stored: a database leak must not
+  /// hand an attacker a working session.
+  tokenHash String @unique @map("token_hash") @db.VarChar(64)
+
+  familyId      String    @map("family_id")
+  expiresAt     DateTime  @map("expires_at")
+  revokedAt     DateTime? @map("revoked_at")
+  revokedReason String?   @map("revoked_reason") @db.VarChar(64)
+  replacedById  String?   @map("replaced_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  session    Session        @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  replacedBy RefreshToken?  @relation("TokenRotation", fields: [replacedById], references: [id], onDelete: SetNull)
+  replaced   RefreshToken[] @relation("TokenRotation")
+
+  @@index([sessionId])
+  @@index([familyId])
+  @@index([expiresAt])
+  @@map("refresh_token")
+}

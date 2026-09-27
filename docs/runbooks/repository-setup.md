@@ -47,7 +47,54 @@ curl -s localhost:4000/health     # { "status":"ok", … }
 
 ---
 
-## 2. GitHub — repository settings
+## 1.1 Local PostgreSQL and the application role (M2)
+
+**Why** — the migration, seed and tenant-isolation suites need a real PostgreSQL. Neon works, but a database on the
+machine is faster and needs no account. More importantly, it is where the **least-privilege application role** is
+demonstrated: PostgreSQL exempts superusers and `BYPASSRLS` roles from row-level security, so an application
+connecting as the database owner has every tenant isolation policy silently disabled.
+
+**Do this**
+
+1. Have a PostgreSQL server running (Docker `pnpm db:up`, or a local install) and create a database.
+2. Point `apps/api/.env.local` at it — `DATABASE_URL` (the application, as `chapfoody_app`) and `DIRECT_URL` (the
+   owner, for migrations). Encode a `#` in a password as `%23`, or everything after it is parsed as a URL fragment.
+3. Create the application role once, substituting a password for the `:app_role_password` token:
+   ```bash
+   psql "$DIRECT_URL" -v app_role_password="'a-password'" -f apps/api/prisma/sql/app-role.sql
+   ```
+4. Apply the migrations and seed:
+   ```bash
+   pnpm --filter @chapfoody/api exec prisma migrate deploy
+   pnpm --filter @chapfoody/api exec prisma db seed
+   ```
+
+**Verify** — the role must not be a superuser and must not bypass RLS:
+
+```bash
+psql "$DATABASE_URL" -c \
+  "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user"
+# chapfoody_app | f | f
+```
+
+Then run the isolation suite. It connects as the role above and **refuses to run** as a superuser, because every
+assertion would otherwise pass without proving anything:
+
+```bash
+INTEGRATION_DATABASE_URL="$DATABASE_URL" \
+  pnpm --filter @chapfoody/api test:integration
+```
+
+**Reading the results** — 13 isolation tests plus the migration and seed checks. A quick manual confirmation of the
+same property:
+
+```bash
+# As chapfoody_app with no tenant context, every tenant table is empty. That is fail-closed,
+# not a bug: `prisma db seed` reports "0 businesses" at the end for exactly this reason.
+psql "$DATABASE_URL" -c "SELECT count(*) FROM business"
+```
+
+
 
 **Why** — the plan assumes trunk-based development with a protected `main` and Conventional Commits (plan §7.4).
 
