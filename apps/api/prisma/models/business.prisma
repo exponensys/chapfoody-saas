@@ -104,6 +104,17 @@ model Business {
   modifiers             Modifier[]
   productModifierGroups ProductModifierGroup[]
 
+  // ── Stock and purchasing ───────────────────────────────────────────────────
+  stockLocations     StockLocation[]
+  stockItems         StockItem[]
+  stockMovements     StockMovement[]
+  stockCounts        StockCount[]
+  stockCountLines    StockCountLine[]
+  suppliers          Supplier[]
+  supplierProducts   SupplierProduct[]
+  purchaseOrders     PurchaseOrder[]
+  purchaseOrderLines PurchaseOrderLine[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

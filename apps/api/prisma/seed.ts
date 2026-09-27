@@ -43,6 +43,7 @@ import { seedCatalog } from './seed/catalog.js';
 import { DEMO_CATALOGS } from './seed/catalog-data.js';
 import { FEATURES } from './seed/features.js';
 import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
+import { seedStock } from './seed/stock.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -194,11 +195,18 @@ function addMonths(date: Date, months: number): Date {
 interface SeedTally {
   businesses: number;
   catalogProducts: number;
+  stockItems: number;
+  stockMovements: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
   const featureSeedByKey = new Map(FEATURES.map((entry) => [entry.key, entry]));
-  const tally: SeedTally = { businesses: 0, catalogProducts: 0 };
+  const tally: SeedTally = {
+    businesses: 0,
+    catalogProducts: 0,
+    stockItems: 0,
+    stockMovements: 0,
+  };
 
   for (const account of ACCOUNTS) {
     // Users are platform-level: no tenant context, and app_user carries no RLS.
@@ -327,6 +335,20 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
       if (catalog !== undefined) {
         const written = await seedCatalog(tx, tenant.id, business.currency, catalog);
         tally.catalogProducts += written.products;
+
+        // Stock, the supplier catalogue and the opening ledger entries. A kitchen is
+        // stocked by ingredient, a shop by product — seedStock decides from the catalogue.
+        const stocked = await seedStock(
+          tx,
+          tenant.id,
+          business.currency,
+          catalog,
+          business.category === 'restaurant' || business.category === 'catering'
+            ? 'Cuisine'
+            : 'Stock principal',
+        );
+        tally.stockItems += stocked.items;
+        tally.stockMovements += stocked.movements;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -388,7 +410,8 @@ async function main(): Promise<void> {
     // before someone "fixes" this line. The seed's own tally is reported instead.
     process.stdout.write(
       `\nSeed complete: ${plans} plans, ${features} features, ${users} users, ` +
-        `${tally.businesses} businesses, ${tally.catalogProducts} produits de démonstration.\n` +
+        `${tally.businesses} businesses, ${tally.catalogProducts} produits, ` +
+        `${tally.stockItems} articles en stock, ${tally.stockMovements} mouvements.\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

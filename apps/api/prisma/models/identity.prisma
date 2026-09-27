@@ -57,6 +57,11 @@ model User {
   acceptedInvitations Invitation[]        @relation("InvitationAcceptor")
   auditLogs           AuditLog[]
 
+  // Stock movements and purchase orders record WHO did them, so a discrepancy can be
+  // traced to a person rather than to "the system".
+  stockMovements StockMovement[]
+  purchaseOrders PurchaseOrder[] @relation("PurchaseOrderAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

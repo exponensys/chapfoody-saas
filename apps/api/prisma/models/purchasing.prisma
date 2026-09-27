@@ -1,0 +1,156 @@
+// Purchasing — who a business buys from, on what terms, and what it ordered.
+
+/// A supplier.
+model Supplier {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  name        String  @db.VarChar(200)
+  contactName String? @map("contact_name") @db.VarChar(160)
+  email       String? @db.VarChar(320)
+  phone       String? @db.VarChar(32)
+
+  addressLine String? @map("address_line") @db.VarChar(200)
+  city        String? @db.VarChar(120)
+  country     String? @db.Char(2)
+
+  notes String? @db.Text
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business       Business          @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  products       SupplierProduct[]
+  purchaseOrders PurchaseOrder[]
+  ingredients    Ingredient[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive, name])
+  @@map("supplier")
+}
+
+/// What a supplier provides, at what price and lead time.
+///
+/// Polymorphic target (product or ingredient) for the same reason as `stock_item`: a
+/// supplier sells both finished goods and raw materials, and those are different tables.
+/// Exactly one target is enforced by a CHECK constraint in the migration, plus partial
+/// unique indexes so one item is not listed twice with the same supplier.
+model SupplierProduct {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  supplierId String @map("supplier_id")
+
+  productId    String? @map("product_id")
+  ingredientId String? @map("ingredient_id")
+
+  /// The supplier's own reference, so an order can be placed using it.
+  supplierSku String? @map("supplier_sku") @db.VarChar(64)
+
+  unitCost     Decimal? @map("unit_cost") @db.Decimal(14, 2)
+  currency     String   @default("EUR") @db.Char(3)
+  leadTimeDays Int?     @map("lead_time_days")
+
+  /// Suppliers often refuse small orders; without this a reorder suggestion proposes an
+  /// order that will be rejected.
+  minOrderQuantity Decimal? @map("min_order_quantity") @db.Decimal(14, 3)
+
+  /// The supplier to use when several provide the same item and nothing else decides.
+  isPreferred Boolean @default(false) @map("is_preferred")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business    @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier   Supplier    @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  product    Product?    @relation(fields: [productId], references: [id], onDelete: Cascade)
+  ingredient Ingredient? @relation(fields: [ingredientId], references: [id], onDelete: Cascade)
+
+  @@index([businessId])
+  @@index([supplierId])
+  @@index([productId])
+  @@index([ingredientId])
+  @@map("supplier_product")
+}
+
+/// An order placed with a supplier.
+model PurchaseOrder {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  supplierId String  @map("supplier_id")
+  /// Where the goods are expected. Nullable when the business has a single location.
+  locationId String? @map("location_id")
+
+  /// Human reference, unique per tenant: "BC-2026-0007".
+  number String @db.VarChar(32)
+
+  status PurchaseOrderStatus @default(DRAFT)
+
+  orderedAt  DateTime? @map("ordered_at")
+  expectedAt DateTime? @map("expected_at")
+  receivedAt DateTime? @map("received_at")
+
+  /// Money as DECIMAL(14,2). Stored rather than derived, because a tax rule change must
+  /// not silently rewrite an order that was already issued.
+  subtotal  Decimal @db.Decimal(14, 2)
+  taxAmount Decimal @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  total     Decimal @db.Decimal(14, 2)
+  currency  String  @default("EUR") @db.Char(3)
+
+  notes       String? @db.Text
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier  Supplier       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  location  StockLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  createdBy User?          @relation("PurchaseOrderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines PurchaseOrderLine[]
+
+  @@unique([businessId, number])
+  @@index([businessId, status, orderedAt])
+  @@index([supplierId])
+  @@map("purchase_order")
+}
+
+/// A line of a purchase order.
+///
+/// `receivedQuantity` is separate from `quantity` on purpose: suppliers deliver short, and
+/// an order that cannot record what actually arrived produces stock that never reconciles.
+model PurchaseOrderLine {
+  id              String @id @default(cuid())
+  businessId      String @map("business_id")
+  purchaseOrderId String @map("purchase_order_id")
+
+  productId    String? @map("product_id")
+  ingredientId String? @map("ingredient_id")
+
+  /// Copied at order time, so renaming the product does not rewrite a past order.
+  description String @db.VarChar(200)
+
+  quantity  Decimal     @db.Decimal(14, 3)
+  unit      ProductUnit
+  unitCost  Decimal     @map("unit_cost") @db.Decimal(14, 2)
+  /// Quantity × unitCost, stored for the same reason as the order totals.
+  lineTotal Decimal     @map("line_total") @db.Decimal(14, 2)
+
+  receivedQuantity Decimal? @map("received_quantity") @db.Decimal(14, 3)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business      Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  product       Product?      @relation(fields: [productId], references: [id], onDelete: SetNull)
+  ingredient    Ingredient?   @relation(fields: [ingredientId], references: [id], onDelete: SetNull)
+
+  @@index([purchaseOrderId, sortOrder])
+  @@index([businessId])
+  @@map("purchase_order_line")
+}

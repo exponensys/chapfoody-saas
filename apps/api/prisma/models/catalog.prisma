@@ -145,6 +145,13 @@ model Product {
   priceListItems PriceListItem[]
   recipe         Recipe?
 
+  // Stock, purchasing and stock counts each reference a product on their own row.
+  stockItems         StockItem[]
+  stockMovements     StockMovement[]
+  stockCountLines    StockCountLine[]
+  supplierProducts   SupplierProduct[]
+  purchaseOrderLines PurchaseOrderLine[]
+
   /// SKU and slug are unique per tenant: two restaurants may both sell a "plat-du-jour"
   /// and both use "PLJ-001", and neither should collide with the other.
   @@unique([businessId, sku])
@@ -185,6 +192,8 @@ model ProductVariant {
   business       Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
   product        Product         @relation(fields: [productId], references: [id], onDelete: Cascade)
   priceListItems PriceListItem[]
+  stockItems     StockItem[]
+  stockMovements StockMovement[]
 
   @@unique([businessId, sku])
   /// Two variants of the same product cannot share a name.

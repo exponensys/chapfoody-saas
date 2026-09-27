@@ -223,3 +223,13 @@ enum PurchaseOrderStatus {
 
   @@map("purchase_order_status")
 }
+
+/// A stock-take is open while it is being counted, then closed once its differences have
+/// been applied as movements.
+enum StockCountStatus {
+  OPEN
+  CLOSED
+  CANCELED
+
+  @@map("stock_count_status")
+}

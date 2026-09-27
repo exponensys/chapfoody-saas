@@ -484,13 +484,14 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 2/N)** — Three domain groups are done and verified on a real PostgreSQL (local 18.3 and
-Neon 18.6): identity/tenancy, subscription/premium, and catalogue. 39 tables, 21 enum types, five migrations, 13
-tenant-isolation integration tests and 18 schema/seed guards, all green. Eleven domain groups remain; they copy the
-pattern established here (`apps/api/prisma/models/`, and the conventions block at the top of `prisma/schema.prisma`).
+**Avancement (increment 3/N)** — Five domain groups are done and verified on a real PostgreSQL (local 18.3 and
+Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock and purchasing. 48 tables, 22 enum types,
+seven migrations, 14 tenant-isolation integration tests and 18 schema/seed guards, all green. Nine domain groups
+remain; they copy the pattern established here (`apps/api/prisma/models/`, and the conventions block at the top of
+`prisma/schema.prisma`).
 
 A note on how RLS is extended from here. The first RLS migration listed its tables by hand. That does not scale —
-eleven more domains mean eleven more lists, and one omission leaves a tenant table readable by everyone, silently. So
+nine more domains mean nine more lists, and one omission leaves a tenant table readable by everyone, silently. So
 the rule now lives in a database function, and each domain migration ends with a single line:
 
 ```sql
@@ -498,9 +499,9 @@ SELECT cf_apply_tenant_rls();
 ```
 
 It protects any table that has since appeared with a `business_id` column, is idempotent (a table that already has a
-policy is left alone, which is what preserves the hand-written policies on `business`, `business_member`,
-`invitation` and `audit_log`), and the integration suite still asserts the outcome independently — the mechanism and
-the check deliberately do not share a single point of failure.
+policy is left alone), and the integration suite still asserts the outcome independently — the mechanism and the
+check deliberately do not share a single point of failure. The inventory migration shows the two composing: the
+append-only policies on `stock_movement` are written by hand *before* the call, and the function skips them.
 
 Recorded deviations from the model list in section 5.2, each deliberate:
 
@@ -517,8 +518,8 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 
 **Tâches**
 1. Write `prisma/schema.prisma` domain by domain — one PR per domain group, each carrying its own migration.
-   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Three groups done
-   (identity/tenancy, subscription/premium, catalogue); eleven to go.
+   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Five groups done
+   (identity/tenancy, subscription/premium, catalogue, stock, purchasing); nine to go.
 2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[~]`
    Done for the tables that exist — 26 tenant references on the local database, 0 unprotected. Enforced for every
    future table by three tests: the RLS-coverage query and the schema-vs-list check, plus `cf_apply_tenant_rls()`
@@ -530,10 +531,11 @@ Recorded deviations from the model list in section 5.2, each deliberate:
    the application from every policy, so the isolation tests would have passed while proving nothing.
 4. `prisma/seed.ts`: plans (Free / Standard / Premium), the `Feature` registry, the accounts of section 5.4, one
    business per client account, and a demo catalog + stock + orders per business. `[~]` Plans, the 39-feature
-   registry, the 8 accounts, 7 businesses with memberships, subscriptions and resolved entitlements, and a **demo
+   registry, the 8 accounts, 7 businesses with memberships, subscriptions and resolved entitlements, a **demo
    catalogue** (17 categories, 32 products, ingredients, a recipe with its bill of materials, and a modifier group)
-   are seeded idempotently and through `runAsTenant`. Demo **stock** and **orders** wait for the inventory and sales
-   domains to exist.
+   and **demo stock** (a default location per business, 19 stocked items, an opening ledger entry each, a supplier
+   with its catalogue) are seeded idempotently and through `runAsTenant`. Demo **orders** wait for the sales domain
+   to exist.
 5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
    migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
    There was never a `db push` script to remove.

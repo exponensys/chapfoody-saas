@@ -273,6 +273,61 @@ describeWhenConfigured('Tenant isolation (integration)', () => {
     expect(after).toEqual(before);
   });
 
+  it('makes the stock ledger append-only too', async () => {
+    // Non-vacuous on purpose: a row is created first, so "nothing changed" cannot be
+    // satisfied merely because the table was empty.
+    const movementId = await runAsTenant(
+      prisma,
+      { businessId: tenantA, userId: ownerA },
+      async (tx) => {
+        const location = await tx.stockLocation.create({
+          data: { businessId: tenantA, name: `Entrepôt ${suffix}` },
+        });
+
+        const product = await tx.product.create({
+          data: {
+            businessId: tenantA,
+            sku: `SKU-${suffix}`,
+            slug: `probe-${suffix}`,
+            name: 'Produit sonde',
+            price: '1.00',
+          },
+        });
+
+        const movement = await tx.stockMovement.create({
+          data: {
+            businessId: tenantA,
+            locationId: location.id,
+            productId: product.id,
+            reason: 'PURCHASE',
+            quantityDelta: '5.000',
+            quantityAfter: '5.000',
+          },
+        });
+
+        return movement.id;
+      },
+    );
+
+    const updated = await runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+      tx.stockMovement.updateMany({ where: { id: movementId }, data: { quantityDelta: '99.000' } }),
+    );
+    const deleted = await runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+      tx.stockMovement.deleteMany({ where: { id: movementId } }),
+    );
+
+    expect(updated.count).toBe(0);
+    expect(deleted.count).toBe(0);
+
+    const remaining = await runAsTenant(prisma, { businessId: tenantA }, (tx) =>
+      tx.stockMovement.findMany({ where: { id: movementId }, select: { quantityDelta: true } }),
+    );
+
+    expect(remaining).toHaveLength(1);
+    // Still the original value, not 99.
+    expect(remaining[0]?.quantityDelta.toString()).toBe('5');
+  });
+
   it('has row-level security enabled on every table carrying a business_id', async () => {
     // The guard for the twelve domains still to come: a migration that adds a tenant
     // table and forgets ENABLE ROW LEVEL SECURITY fails here, not in production.

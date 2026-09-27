@@ -77,14 +77,27 @@ model Ingredient {
 
   isActive Boolean @default(true) @map("is_active")
 
+  /// The usual supplier for this ingredient. Nullable: ingredients are often recorded
+  /// before anyone decides who provides them, and forcing a choice would be a guess.
+  supplierId String? @map("supplier_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
   business    Business     @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  supplier    Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
   recipeLines RecipeLine[]
+
+  // Referenced from the stock and purchasing domains, one row each.
+  stockItems         StockItem[]
+  stockMovements     StockMovement[]
+  stockCountLines    StockCountLine[]
+  supplierProducts   SupplierProduct[]
+  purchaseOrderLines PurchaseOrderLine[]
 
   @@unique([businessId, name])
   @@index([businessId, isActive])
+  @@index([supplierId])
   @@map("ingredient")
 }
 

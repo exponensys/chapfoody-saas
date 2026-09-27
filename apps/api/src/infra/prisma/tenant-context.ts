@@ -120,6 +120,16 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Recipe',
   'RecipeLine',
   'Utensil',
+  // Stock and purchasing (M2, increment 3)
+  'PurchaseOrder',
+  'PurchaseOrderLine',
+  'StockCount',
+  'StockCountLine',
+  'StockItem',
+  'StockLocation',
+  'StockMovement',
+  'Supplier',
+  'SupplierProduct',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',
