@@ -63,8 +63,75 @@ jobs:
       - name: Test
         run: pnpm test
 
+      # Coverage thresholds are declared in apps/api/jest.config.mjs and enforced
+      # here, so a drop below them fails the pipeline rather than being noticed later.
+      - name: Test with coverage
+        run: pnpm test:coverage
+
       - name: Build
         run: pnpm build
+
+  integration:
+    name: integration (PostgreSQL + Redis)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The API's integration specs need real services. They are skipped when the
+    # INTEGRATION_* variables are absent, so this job is what actually exercises them.
+    #
+    # Service containers are used rather than a Neon branch: they need no secret, they
+    # start in seconds, and M1 has no schema to migrate yet. The runbook documents
+    # switching to an ephemeral Neon branch once migrations exist (M2).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: chapfoody
+          POSTGRES_PASSWORD: chapfoody
+          POSTGRES_DB: chapfoody
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chapfoody"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build (also generates the Prisma client)
+        run: pnpm --filter @chapfoody/api build
+
+      - name: Run integration tests
+        env:
+          INTEGRATION_DATABASE_URL: postgresql://chapfoody:chapfoody@localhost:5432/chapfoody
+          INTEGRATION_REDIS_URL: redis://localhost:6379
+        run: pnpm --filter @chapfoody/api test:integration
 
   security:
     name: dependency audit (non-blocking)
