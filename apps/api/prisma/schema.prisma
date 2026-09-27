@@ -1,0 +1,38 @@
+// Chapfoody — Prisma schema (Prisma 7).
+//
+// SCOPE (implementation plan §6):
+//   M1 — generator + datasource only. Enough for a working PrismaClient for the
+//        database health probe, and to settle the connection strategy before the
+//        first query is written.
+//   M2 — the full domain schema (identity, tenancy, subscriptions, catalog,
+//        inventory, orders, POS, accounting, HR, delivery, affiliate, marketing,
+//        content, storefront), the RLS policies, the migrations and the seed.
+//
+// WHY THIS FILE LIVES UNDER apps/api
+//   Prisma 7 requires a `prisma.config.ts` next to the package that declares the
+//   `prisma` dependency, and it validates that layout. Keeping the schema beside
+//   the API that owns it follows the documented convention and avoids path
+//   gymnastics in every command. See the API README for the note recorded against
+//   the repository layout in the implementation plan.
+
+generator client {
+  provider = "prisma-client"
+
+  // REQUIRED in Prisma 7. Inside `src/` on purpose: the API compiles with
+  // `rootDir: src`, so a client generated outside it could not be imported without
+  // producing "file is not under rootDir" errors. tsc compiles the generated
+  // TypeScript along with the application code.
+  output = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+
+  // No `url` / `directUrl` here: Prisma 7 moved connection URLs to
+  // prisma.config.ts, and removed the schema-level `directUrl` entirely.
+  // The pooled/direct split is therefore expressed like this:
+  //   - PrismaClient at runtime → POOLED url, passed through the pg driver adapter
+  //     in PrismaService (apps/api/src/infra/prisma/prisma.service.ts)
+  //   - Prisma CLI (migrate, studio) → DIRECT url, from prisma.config.ts
+  // See apps/api/.env.example for the required connection parameters.
+}
