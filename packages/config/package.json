@@ -1,0 +1,32 @@
+{
+  "name": "@chapfoody/config",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared tooling configuration for the Chapfoody monorepo: TypeScript bases, ESLint, Prettier and the Tailwind design-token preset",
+  "exports": {
+    "./eslint": "./eslint.config.js",
+    "./prettier": "./prettier.config.js",
+    "./tailwind/preset.css": "./tailwind/preset.css",
+    "./tsconfig/base.json": "./tsconfig/base.json",
+    "./tsconfig/node.json": "./tsconfig/node.json",
+    "./tsconfig/next.json": "./tsconfig/next.json",
+    "./tsconfig/library.json": "./tsconfig/library.json"
+  },
+  "files": ["eslint.config.js", "prettier.config.js", "tailwind", "tsconfig"],
+  "dependencies": {
+    "@eslint/js": "10.0.1",
+    "eslint-config-prettier": "10.1.8",
+    "typescript-eslint": "8.70.1"
+  },
+  "peerDependencies": {
+    "eslint": "^10.0.0",
+    "prettier": "^3.0.0",
+    "typescript": ">=5.9.0 <6.1.0"
+  },
+  "devDependencies": {
+    "eslint": "10.11.0",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3"
+  }
+}

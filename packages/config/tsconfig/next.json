@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Chapfoody Next.js (App Router)",
+  "extends": "./base.json",
+  // jsx is left to the Next.js compiler (preserve), and noEmit is required:
+  // Next owns the emit step.
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "jsx": "preserve",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "noEmit": true,
+    "types": ["node"],
+    "plugins": [{ "name": "next" }]
+  }
+}

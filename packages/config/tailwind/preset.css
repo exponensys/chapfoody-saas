@@ -1,0 +1,45 @@
+/*
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Chapfoody design tokens — Tailwind CSS v4 preset
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * SOURCE OF TRUTH for the Chapfoody brand palette (ADR-0001, follow-up 1).
+ *
+ * Why this file exists: in the prototype the brand colours were hardcoded as
+ * Tailwind arbitrary values (`bg-[#b70f23]`) in hundreds of places, while
+ * `--primary` pointed at an unrelated near-black. That made per-tenant theming
+ * impossible and is therefore a blocker for the client selling websites
+ * (requirement C). Promoting them to real tokens here fixes the foundation.
+ *
+ * Migration status:
+ *   M0  token file created, consumed by apps/next.
+ *   M4  completes debt D4/D5 — the duplicated legacy token files
+ *       (`default_theme.css` 16px vs `globals.css` 14px) are consolidated into
+ *       this single file and every hardcoded hex value is replaced.
+ *
+ * Base font size: 14px. The prototype declared 16px in default_theme.css and
+ * 14px in globals.css; because index.css imported the latter last, 14px is what
+ * actually rendered. That implicit outcome is made explicit here.
+ *
+ * Usage in an app:
+ *   @import 'tailwindcss';
+ *   @import '@chapfoody/config/tailwind/preset.css';
+ */
+
+@theme {
+  /* ── Brand ─────────────────────────────────────────────────────────────── */
+  --color-brand-primary: #b70f23; /* rouge vif   — primary actions, active nav */
+  --color-brand-accent: #f4b71b; /* jaune-orangé — highlights, badges, delivery */
+  --color-brand-deep: #70070e; /* bordeaux     — headers, sidebar, dark surfaces */
+
+  /* ── Semantic aliases (used by shadcn/ui components) ───────────────────── */
+  --color-primary: var(--color-brand-primary);
+  --color-primary-foreground: #ffffff;
+  --color-ring: var(--color-brand-primary);
+
+  /* ── Typography ────────────────────────────────────────────────────────── */
+  --font-size-base: 14px;
+
+  /* ── Radii (unchanged from the prototype) ──────────────────────────────── */
+  --radius-base: 0.625rem;
+}

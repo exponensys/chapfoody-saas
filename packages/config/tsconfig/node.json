@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Chapfoody Node (NestJS API, worker, scripts)",
+  "extends": "./base.json",
+  // Native ESM for Node: relative imports must carry the .js extension.
+  // rootDir and outDir are DELIBERATELY NOT declared here: relative paths inside
+  // an extended config resolve against the config file that declares them, so they
+  // would point at packages/config/tsconfig/dist. Each app declares its own.
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"]
+  }
+}

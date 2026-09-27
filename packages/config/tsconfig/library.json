@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "display": "Chapfoody library (packages/*, compiled to dist with declarations)",
+  "extends": "./base.json",
+  // Emits ESM + .d.ts so both the Next.js bundler and the Node API can consume the
+  // package. Relative imports must carry the .js extension.
+  // rootDir and outDir are DELIBERATELY NOT declared here: relative paths inside an
+  // extended config resolve against the config file that declares them, so they would
+  // point at packages/config/tsconfig/dist. Each package declares its own.
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "declaration": true,
+    // Maps each .d.ts back to the original sources, so "go to definition" in an
+    // editor lands on real TypeScript instead of the generated declaration.
+    "declarationMap": true
+  }
+}
