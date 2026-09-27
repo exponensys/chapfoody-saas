@@ -1,0 +1,58 @@
+# Local development backing services for Chapfoody.
+#
+#   pnpm db:up     start Postgres + Redis
+#   pnpm db:down   stop them
+#
+# ── Important ────────────────────────────────────────────────────────────────
+# Docker is OPTIONAL. The production database is Neon (serverless Postgres), so
+# a Neon `dev` branch is a perfectly valid local alternative:
+#   1. create the branch, 2. copy the pooled + direct connection strings into
+#   apps/api/.env.local (see apps/api/.env.example), 3. skip this file entirely.
+# Redis has no managed equivalent configured yet; for local work without Docker,
+# run `redis-server` directly or point REDIS_URL at a free Upstash database.
+#
+# The ports are overridable so they cannot clash with an existing local Postgres.
+name: chapfoody
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: chapfoody-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chapfoody}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chapfoody}
+      POSTGRES_DB: ${POSTGRES_DB:-chapfoody}
+      # Deterministic collation, needed for reproducible ordering in reports.
+      POSTGRES_INITDB_ARGS: '--encoding=UTF8 --locale=C'
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER:-chapfoody} -d ${POSTGRES_DB:-chapfoody}']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: chapfoody-redis
+    restart: unless-stopped
+    # Cache, rate limiting and BullMQ queues. Persistence is enabled so a local
+    # restart does not lose queued jobs mid-development.
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

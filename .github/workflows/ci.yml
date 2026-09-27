@@ -1,0 +1,97 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Chapfoody SaaS — continuous integration
+#
+# Pipeline (ImplementationPlan.md section 8):
+#   install → lint → typecheck → test → build
+#
+# Milestone notes:
+#   M0  this file proves the workspace pipeline is green on an empty tree.
+#   M1  adds integration tests against an ephemeral Neon branch.
+#   M4+ adds Playwright E2E for PRs touching dashboard/storefront surfaces.
+# ─────────────────────────────────────────────────────────────────────────────
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# A new push to the same branch cancels the previous, still-running pipeline.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Node 24 LTS is the recommended runtime (.nvmrc). The workspace engines range
+  # is ">=24.0.0", which also covers the Node 25 used by some local machines.
+  NODE_VERSION: '24'
+  PNPM_VERSION: '12.6.0'
+
+jobs:
+  quality:
+    name: lint · typecheck · test · build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      # --frozen-lockfile also asserts that pnpm-lock.yaml is committed and in
+      # sync with the manifests, so a stale lockfile fails here rather than in
+      # production.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  security:
+    name: dependency audit (non-blocking)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Deliberately non-blocking in M0: a fresh advisory must never silently stop
+    # deliveries. M14 turns this into a blocking gate once the dependency set is
+    # stable and a triage process exists (plan section 7.3 rule 9).
+    continue-on-error: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Audit
+        run: pnpm audit --audit-level high

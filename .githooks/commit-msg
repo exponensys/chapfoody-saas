@@ -1,0 +1,39 @@
+#!/bin/sh
+# ─────────────────────────────────────────────────────────────────────────────
+# Conventional Commits gate (M0, plan section 7.4).
+#
+# Activated with:  git config core.hooksPath .githooks      (pnpm hooks:install)
+# Deactivated by:  git config --unset core.hooksPath
+#
+# Kept dependency-free on purpose: a native git hook cannot drift with a
+# dependency upgrade, and it works offline. Commitlint can replace it later
+# without changing the convention itself.
+# ─────────────────────────────────────────────────────────────────────────────
+
+msg_file="$1"
+
+# Comments, empty lines and verbose-only messages are ignored by git.
+first_line=$(grep -v '^#' "$msg_file" | sed '/^[[:space:]]*$/d' | head -n 1)
+
+# Let git itself through: merges, reverts, fixups and squashes.
+case "$first_line" in
+  "Merge "*|"Revert "*|"fixup! "*|"squash! "*|"amend! "*)
+    exit 0
+    ;;
+esac
+
+pattern='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .{3,}'
+
+if ! printf '%s' "$first_line" | grep -Eq "$pattern"; then
+  printf '\n✖ Commit message rejected.\n\n'
+  printf '  Got : %s\n\n' "$first_line"
+  printf '  Expected: <type>(<scope>): <subject>   — at least 3 characters\n\n'
+  printf '  Types  : feat fix docs style refactor perf test build ci chore revert\n'
+  printf '  Example: feat(orders): add live order sound alerts\n'
+  printf '           fix(pos): prevent duplicate cash closure\n'
+  printf '           chore(config): pin typescript to 5.9.3\n\n'
+  printf '  Reference: guidelines/ImplementationPlan.md section 7.4\n\n'
+  exit 1
+fi
+
+exit 0
