@@ -122,6 +122,12 @@ today. This remains the accepted escape hatch if the storefront ever needs its o
 **Rejected — keeping Vite**: no server rendering for a content/SEO-driven public site, no route-level data loading,
 and the requirement explicitly asks for a Next.js migration.
 
+**Amendment (2026-09-27, milestone M0)** — implemented on **Next.js 16.3.6**, the current stable release, rather than
+the 15.x line referenced when this decision was written. What the decision actually fixes is the topology — one
+application, five route groups, one deployment — and that is unchanged by the major version. Pinning an older major
+would only have scheduled a migration for later. Revisit only if Next 16 proves incompatible with a required library at
+M4.
+
 ### D5 — Shared-schema multi-tenancy with RLS
 
 **Why**: hundreds of small clients, not dozens of large ones. A shared schema means one migration path and cheap
