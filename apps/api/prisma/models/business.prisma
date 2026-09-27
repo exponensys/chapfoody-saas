@@ -115,6 +115,16 @@ model Business {
   purchaseOrders     PurchaseOrder[]
   purchaseOrderLines PurchaseOrderLine[]
 
+  // ── Sales and front of house ───────────────────────────────────────────────
+  orderTypes         OrderType[]
+  tables             Table[]
+  reservations       Reservation[]
+  pickupPoints       PickupPoint[]
+  orders             Order[]
+  orderLines         OrderLine[]
+  orderLineModifiers OrderLineModifier[]
+  orderStatusHistory OrderStatusHistory[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

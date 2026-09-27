@@ -42,6 +42,7 @@ import { ACCOUNTS } from './seed/accounts.js';
 import { seedCatalog } from './seed/catalog.js';
 import { DEMO_CATALOGS } from './seed/catalog-data.js';
 import { FEATURES } from './seed/features.js';
+import { seedFrontOfHouse, seedOrderTypes, seedOrders } from './seed/orders.js';
 import { BUSINESS_TYPES, PLANS } from './seed/plans.js';
 import { seedStock } from './seed/stock.js';
 
@@ -197,6 +198,10 @@ interface SeedTally {
   catalogProducts: number;
   stockItems: number;
   stockMovements: number;
+  orderTypes: number;
+  tables: number;
+  reservations: number;
+  orders: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -206,6 +211,10 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     catalogProducts: 0,
     stockItems: 0,
     stockMovements: 0,
+    orderTypes: 0,
+    tables: 0,
+    reservations: 0,
+    orders: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -349,6 +358,30 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         );
         tally.stockItems += stocked.items;
         tally.stockMovements += stocked.movements;
+
+        // ── Order types, front of house and a couple of orders ─────────────────
+        // Order types come first: an order cannot be created without one, and the two orders
+        // below are what make every sales and kitchen screen non-empty on a fresh install.
+        const orderTypes = await seedOrderTypes(tx, tenant.id, business.category);
+        tally.orderTypes += orderTypes.count;
+
+        const frontOfHouse = await seedFrontOfHouse(
+          tx,
+          tenant.id,
+          business.category,
+          stocked.locationId,
+        );
+        tally.tables += frontOfHouse.tables;
+        tally.reservations += frontOfHouse.reservations;
+
+        tally.orders += await seedOrders(
+          tx,
+          tenant.id,
+          business.currency,
+          catalog,
+          orderTypes.idByCode,
+          stocked.locationId,
+        );
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -410,8 +443,11 @@ async function main(): Promise<void> {
     // before someone "fixes" this line. The seed's own tally is reported instead.
     process.stdout.write(
       `\nSeed complete: ${plans} plans, ${features} features, ${users} users, ` +
-        `${tally.businesses} businesses, ${tally.catalogProducts} produits, ` +
-        `${tally.stockItems} articles en stock, ${tally.stockMovements} mouvements.\n` +
+        `${tally.businesses} businesses\n` +
+        `  catalogue : ${tally.catalogProducts} produits, ${tally.orderTypes} types de commande\n` +
+        `  stock     : ${tally.stockItems} articles, ${tally.stockMovements} mouvements\n` +
+        `  salle     : ${tally.tables} tables, ${tally.reservations} réservations\n` +
+        `  ventes    : ${tally.orders} commandes\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

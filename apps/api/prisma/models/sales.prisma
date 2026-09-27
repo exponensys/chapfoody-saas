@@ -1,0 +1,255 @@
+// Sales — the order and what it is made of.
+//
+// The Order model is the busiest table in the system: every till action, every storefront
+// checkout and every delivery writes here, and the accounting domain reads it. Two decisions
+// run through all of it.
+//
+// MONEY IS COPIED, NOT DERIVED. An order's totals, and each line's name, price, tax rate and
+// cost, are stored as they were at the moment of sale. A restaurant that raises a price in
+// March must not change what January's receipts say happened, and a VAT return recomputed
+// from today's rates would be a false declaration.
+//
+// THE STATUS SET IS SHARED BY EVERY CHANNEL. What differs between a delivery and a dine-in
+// order is which fields it needs, not how far along it is — that is what OrderType's flags
+// are for.
+
+/// What kind of order this is, in the business's own words: "Sur place", "À emporter",
+/// "Livraison", "En ligne".
+///
+/// Configuration rather than an enum: a caterer inventing "Livraison événement" should not
+/// need a deployment, and the two flags decide which fields the order form requires.
+model OrderType {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Stable code for the API and the seed: 'dine-in', 'takeaway', 'delivery', 'online'.
+  code String @db.VarChar(32)
+  name String @db.VarChar(120)
+
+  requiresTable           Boolean @default(false) @map("requires_table")
+  requiresDeliveryAddress Boolean @default(false) @map("requires_delivery_address")
+  /// Charged on orders of this type, before any per-zone override.
+  defaultDeliveryFee      Decimal @default(0) @map("default_delivery_fee") @db.Decimal(14, 2)
+
+  isDefault Boolean @default(false) @map("is_default")
+  isActive  Boolean @default(true) @map("is_active")
+  sortOrder Int     @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orders   Order[]
+
+  @@unique([businessId, code])
+  @@index([businessId, isActive, sortOrder])
+  @@map("order_type")
+}
+
+/// One sale.
+///
+/// ── Why this maps to `customer_order`, not `order` ───────────────────────────
+/// `ORDER` is a reserved word in SQL. Prisma quotes identifiers so `order` would work from
+/// Prisma — but every hand-written statement (every RLS policy, every report) would then need
+/// `"order"`, and the day someone forgets a pair of quotes they get a syntax error at best.
+/// Naming the table `customer_order` removes the category of mistake.
+model Order {
+  id          String  @id @default(cuid())
+  businessId  String  @map("business_id")
+  /// Where the sale happened. Nullable for a storefront order that predates a location.
+  locationId  String? @map("location_id")
+  orderTypeId String  @map("order_type_id")
+
+  /// Dine-in: the table. Takeaway: where it is collected. Either may be null.
+  tableId       String? @map("table_id")
+  pickupPointId String? @map("pickup_point_id")
+  /// Set when the order honours a booking, so the reservation can be marked SEATED.
+  reservationId String? @map("reservation_id")
+
+  /// Sequential per tenant, and what staff, customers and receipts call it: "2026-000142".
+  number  String       @db.VarChar(32)
+  channel OrderChannel @default(POS)
+  status  OrderStatus  @default(OPEN)
+
+  /// Covers, for a dine-in order. Null for takeaway and delivery.
+  guestCount Int? @map("guest_count")
+
+  placedAt     DateTime  @default(now()) @map("placed_at")
+  /// When it should be ready: a pre-order, or a delivery slot.
+  scheduledFor DateTime? @map("scheduled_for")
+
+  /// Kept alongside OrderStatusHistory: the history records every transition, these two make
+  /// "today's completed orders" an indexed query instead of a scan of the log.
+  completedAt  DateTime? @map("completed_at")
+  canceledAt   DateTime? @map("canceled_at")
+  cancelReason String?   @map("cancel_reason") @db.VarChar(200)
+
+  // ── Money, as recorded at the time of sale ─────────────────────────────────
+  subtotal       Decimal @db.Decimal(14, 2)
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  /// Service charge, where the market adds one.
+  serviceFee     Decimal @default(0) @map("service_fee") @db.Decimal(14, 2)
+  deliveryFee    Decimal @default(0) @map("delivery_fee") @db.Decimal(14, 2)
+  tipAmount      Decimal @default(0) @map("tip_amount") @db.Decimal(14, 2)
+  /// Cash rounding (to the nearest 5 cents where small coins have gone). Stored so that the
+  /// receipt reconciles exactly: subtotal − discount + tax + fees − rounding = total.
+  roundingAmount Decimal @default(0) @map("rounding_amount") @db.Decimal(14, 2)
+  total          Decimal @db.Decimal(14, 2)
+  currency       String  @default("EUR") @db.Char(3)
+
+  /// What has been tendered so far. Denormalised from the tender rows so a ticket list can
+  /// show "unpaid" without aggregating, and updated in the same transaction as the tender.
+  paidAmount Decimal @default(0) @map("paid_amount") @db.Decimal(14, 2)
+
+  /// For the kitchen, free-form: "sans piment", "à emporter bien fermé".
+  note String? @db.Text
+
+  /// A snapshot of where to deliver. The delivery domain will own zones and drivers; when it
+  /// lands it adds a zone reference rather than replacing these, because the address a
+  /// customer gave on the night must not change when they move house.
+  deliveryAddressLine String? @map("delivery_address_line") @db.VarChar(200)
+  deliveryCity        String? @map("delivery_city") @db.VarChar(120)
+  deliveryPhone       String? @map("delivery_phone") @db.VarChar(32)
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business    Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location    StockLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  orderType   OrderType      @relation(fields: [orderTypeId], references: [id], onDelete: Restrict)
+  table       Table?         @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  pickupPoint PickupPoint?   @relation(fields: [pickupPointId], references: [id], onDelete: SetNull)
+  reservation Reservation?   @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  createdBy   User?          @relation("OrderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  lines         OrderLine[]
+  statusHistory OrderStatusHistory[]
+
+  @@unique([businessId, number])
+  /// The screen a busy service looks at: open orders, most recent first.
+  @@index([businessId, status, placedAt])
+  @@index([businessId, placedAt])
+  @@index([businessId, orderTypeId, placedAt])
+  @@index([tableId])
+  @@map("customer_order")
+}
+
+/// One line of an order, as it was sold.
+///
+/// The product's name, SKU, price, cost and tax rate are COPIED here rather than read through
+/// the relation. That is not denormalisation for speed: a receipt reprinted in six months must
+/// say what the customer actually bought and paid, and a product renamed or repriced since
+/// must not rewrite history. The product reference is kept for reporting, and is nullable
+/// because a line can survive the product being deleted.
+model OrderLine {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  orderId    String @map("order_id")
+
+  productId String? @map("product_id")
+  variantId String? @map("variant_id")
+
+  /// Copied at sale time. "Poulet braisé (grand)" rather than a join at print time.
+  name String  @db.VarChar(200)
+  sku  String? @db.VarChar(64)
+
+  /// Three decimals: half a portion and 0.250 kg are both real.
+  quantity Decimal @db.Decimal(14, 3)
+
+  unitPrice Decimal  @map("unit_price") @db.Decimal(14, 2)
+  /// Cost at the time of sale, so the margin report does not move when a supplier changes
+  /// their price weeks later.
+  unitCost  Decimal? @map("unit_cost") @db.Decimal(14, 2)
+
+  discountAmount Decimal @default(0) @map("discount_amount") @db.Decimal(14, 2)
+  taxRate        Decimal @default(0) @map("tax_rate") @db.Decimal(5, 2)
+  taxAmount      Decimal @default(0) @map("tax_amount") @db.Decimal(14, 2)
+  lineTotal      Decimal @map("line_total") @db.Decimal(14, 2)
+
+  /// Kitchen state, per line: a starter is served long before the main is plated.
+  status OrderLineStatus @default(PENDING)
+
+  /// Course sequencing — 1 for starters, 2 for mains. Null when the business does not
+  /// serve in courses.
+  courseNumber Int? @map("course_number")
+
+  note String? @db.Text
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business        @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order    Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product  Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  variant  ProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  modifiers OrderLineModifier[]
+
+  @@index([orderId, sortOrder])
+  @@index([businessId])
+  @@index([productId])
+  @@map("order_line")
+}
+
+/// A modifier chosen for one line: "à point", "sans oignons", "supplément fromage".
+///
+/// The name and the price delta are copied for the same reason as the line's: an option
+/// renamed or repriced later must not change what an old receipt says.
+model OrderLineModifier {
+  id          String @id @default(cuid())
+  businessId  String @map("business_id")
+  orderLineId String @map("order_line_id")
+
+  /// Kept for reporting ("how many people ask for extra cheese?"), nullable so the record
+  /// survives the option being deleted.
+  modifierId String? @map("modifier_id")
+
+  name       String  @db.VarChar(160)
+  priceDelta Decimal @map("price_delta") @db.Decimal(14, 2)
+  quantity   Int     @default(1)
+
+  sortOrder Int @default(0) @map("sort_order")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business  Business  @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  orderLine OrderLine @relation(fields: [orderLineId], references: [id], onDelete: Cascade)
+  modifier  Modifier? @relation(fields: [modifierId], references: [id], onDelete: SetNull)
+
+  @@index([orderLineId])
+  @@index([businessId])
+  @@map("order_line_modifier")
+}
+
+/// Every status an order passed through, and who moved it.
+///
+/// APPEND-ONLY: the policies below grant SELECT and INSERT and nothing else. "Why was this
+/// order cancelled after it was ready?" is a question that must be answerable, and it is only
+/// answerable if the transitions cannot be tidied up afterwards.
+model OrderStatusHistory {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  orderId    String @map("order_id")
+
+  /// Null for the transition that created the order.
+  fromStatus OrderStatus? @map("from_status")
+  toStatus   OrderStatus  @map("to_status")
+
+  changedById String? @map("changed_by_id")
+  reason      String? @db.VarChar(200)
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  order     Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  changedBy User?    @relation("OrderStatusAuthor", fields: [changedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, createdAt])
+  @@index([businessId, createdAt])
+  @@map("order_status_history")
+}

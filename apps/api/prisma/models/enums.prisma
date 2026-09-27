@@ -233,3 +233,125 @@ enum StockCountStatus {
 
   @@map("stock_count_status")
 }
+
+// ── Sales, front of house, till and tax ──────────────────────────────────────
+
+/// The life of an order, from the moment it is taken to the moment it is settled.
+/// One status set for every channel: a delivery and a dine-in order differ in what they
+/// need, not in how far along they are, and two parallel sets would drift apart.
+enum OrderStatus {
+  /// Taken but not yet sent to the kitchen — a POS ticket still being built.
+  OPEN
+  CONFIRMED
+  PREPARING
+  READY
+  COMPLETED
+  CANCELED
+
+  @@map("order_status")
+}
+
+/// How the order reached the business. Distinct from OrderType, which the business defines:
+/// this is where it came from, that is what it needs (a table, a courier, nothing).
+enum OrderChannel {
+  POS
+  STOREFRONT
+  PHONE
+  MARKETPLACE
+
+  @@map("order_channel")
+}
+
+/// Kitchen state of a single line. Tracked per line rather than per order because a
+/// starter is served long before the main course is plated.
+enum OrderLineStatus {
+  PENDING
+  PREPARING
+  READY
+  SERVED
+  CANCELED
+
+  @@map("order_line_status")
+}
+
+enum TableStatus {
+  FREE
+  OCCUPIED
+  RESERVED
+  CLEANING
+  /// Broken, or deliberately not in use.
+  OUT_OF_SERVICE
+
+  @@map("table_status")
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELED
+  /// The party never arrived. Kept separate from CANCELED: one is the customer's doing,
+  /// the other is not, and a no-show report is how a restaurant decides on a deposit policy.
+  NO_SHOW
+
+  @@map("reservation_status")
+}
+
+/// How a customer settles an order — the tender they hand over.
+///
+/// NOT called `PaymentMethod`, even though that is the natural name: the billing domain
+/// already has a `PaymentMethod` MODEL, which is a stored card the PLATFORM charges a
+/// business with. The two are different concepts that happen to share a name, and the
+/// collision is a compile error rather than a subtle bug only because Prisma caught it.
+/// "Tender" is also the more precise word for this side: the money the customer hands over.
+enum TenderMethod {
+  CASH
+  CARD
+  MOBILE_MONEY
+  TRANSFER
+  MEAL_VOUCHER
+  LOYALTY_POINTS
+  GIFT_CARD
+
+  @@map("tender_method")
+}
+
+enum TenderStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  REFUNDED
+
+  @@map("tender_status")
+}
+
+/// Why the drawer moved. Split from the amount so a till report can separate a sale from
+/// a float, a withdrawal, a tip or a mistake.
+enum CashMovementReason {
+  OPENING_FLOAT
+  CASH_SALE
+  WITHDRAWAL
+  DEPOSIT
+  EXPENSE
+  TIP
+  REFUND
+  ADJUSTMENT
+
+  @@map("cash_movement_reason")
+}
+
+enum PosSessionStatus {
+  OPEN
+  CLOSED
+
+  @@map("pos_session_status")
+}
+
+enum VatDeclarationStatus {
+  DRAFT
+  FILED
+  PAID
+
+  @@map("vat_declaration_status")
+}

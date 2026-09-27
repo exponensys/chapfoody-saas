@@ -241,8 +241,9 @@ model Modifier {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  business Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
-  group    ModifierGroup @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  business           Business            @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  group              ModifierGroup       @relation(fields: [modifierGroupId], references: [id], onDelete: Cascade)
+  orderLineModifiers OrderLineModifier[]
 
   @@unique([modifierGroupId, name])
   @@index([businessId])

@@ -30,6 +30,11 @@ model StockLocation {
   counts         StockCount[]
   purchaseOrders PurchaseOrder[]
 
+  // A location can seat guests, be collected from, and take orders.
+  tables       Table[]
+  pickupPoints PickupPoint[]
+  orders       Order[]
+
   @@unique([businessId, name])
   @@index([businessId, isActive, name])
   @@map("stock_location")

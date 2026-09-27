@@ -151,6 +151,7 @@ model Product {
   stockCountLines    StockCountLine[]
   supplierProducts   SupplierProduct[]
   purchaseOrderLines PurchaseOrderLine[]
+  orderLines         OrderLine[]
 
   /// SKU and slug are unique per tenant: two restaurants may both sell a "plat-du-jour"
   /// and both use "PLJ-001", and neither should collide with the other.
@@ -194,6 +195,7 @@ model ProductVariant {
   priceListItems PriceListItem[]
   stockItems     StockItem[]
   stockMovements StockMovement[]
+  orderLines     OrderLine[]
 
   @@unique([businessId, sku])
   /// Two variants of the same product cannot share a name.

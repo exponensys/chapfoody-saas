@@ -20,6 +20,8 @@ export interface StockCounters {
   items: number;
   movements: number;
   suppliers: number;
+  /** The default location, so the sales seed can put orders at it. */
+  locationId: string;
 }
 
 /** Opening quantities, per unit of measure. Small enough to be readable, real enough to sell. */
@@ -32,7 +34,7 @@ export async function seedStock(
   catalog: DemoCatalog,
   locationName: string,
 ): Promise<StockCounters> {
-  const counters: StockCounters = { locations: 0, items: 0, movements: 0, suppliers: 0 };
+  const counters: StockCounters = { locations: 0, items: 0, movements: 0, suppliers: 0, locationId: '' };
 
   const location = await tx.stockLocation.upsert({
     where: { businessId_name: { businessId, name: locationName } },
@@ -40,6 +42,7 @@ export async function seedStock(
     update: { isDefault: true, isActive: true },
   });
   counters.locations += 1;
+  counters.locationId = location.id;
 
   // A kitchen is stocked by ingredient; a shop by product. See the note at the top.
   const stockIngredients = (catalog.ingredients?.length ?? 0) > 0;

@@ -130,6 +130,16 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'StockMovement',
   'Supplier',
   'SupplierProduct',
+  // Sales and front of house (M2, increment 4)
+  'Order',
+  'OrderLine',
+  'OrderLineModifier',
+  'OrderStatusHistory',
+  'OrderType',
+  'PickupPoint',
+  'Reservation',
+  // `Table` keeps its Prisma name but maps to `restaurant_table`: TABLE is a reserved word.
+  'Table',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

@@ -62,6 +62,12 @@ model User {
   stockMovements StockMovement[]
   purchaseOrders PurchaseOrder[] @relation("PurchaseOrderAuthor")
 
+  // Same reasoning for the sales side: who took the order, who booked the table, and who
+  // moved an order to CANCELED after it was ready.
+  orders             Order[]              @relation("OrderAuthor")
+  reservations       Reservation[]        @relation("ReservationAuthor")
+  orderStatusChanges OrderStatusHistory[] @relation("OrderStatusAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

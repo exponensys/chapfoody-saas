@@ -1,0 +1,108 @@
+// Front of house — where guests sit, and where orders are collected from.
+//
+// Separate from the order models because a table exists whether or not anyone is sitting at
+// it, and reservations exist before an order does. An order references a table; a table must
+// not depend on one.
+
+/// A physical table (or a numbered spot at a counter).
+model Table {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  /// Which room or terrace. Nullable when a business has only one area.
+  locationId String? @map("location_id")
+
+  /// "12", "T4", "Terrasse 2" — whatever the staff actually say out loud.
+  name String  @db.VarChar(64)
+  /// Free text: "near the window", "shaded". Used by the floor plan.
+  zone String? @db.VarChar(120)
+
+  capacity Int         @default(2)
+  status   TableStatus @default(FREE)
+
+  sortOrder Int     @default(0) @map("sort_order")
+  isActive  Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location     StockLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  orders       Order[]
+  reservations Reservation[]
+
+  @@unique([businessId, name])
+  @@index([businessId, status, sortOrder])
+  @@map("restaurant_table")
+}
+
+/// A booking. Exists independently of any order: most reservations are honoured, some are
+/// cancelled, and the ones that never arrive are the reason NO_SHOW is its own status.
+model Reservation {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  tableId    String? @map("table_id")
+
+  /// The guest's details, kept on the reservation rather than in a customer record: at
+  /// booking time there may be no customer account yet, and creating one silently would
+  /// fill the customer list with people who never agreed to it.
+  customerName  String  @map("customer_name") @db.VarChar(160)
+  customerPhone String? @map("customer_phone") @db.VarChar(32)
+  customerEmail String? @map("customer_email") @db.VarChar(320)
+
+  partySize Int @map("party_size")
+
+  reservedAt      DateTime @map("reserved_at")
+  /// How long the table is held. Used to derive end time and to detect double-booking.
+  durationMinutes Int      @default(120) @map("duration_minutes")
+
+  status ReservationStatus @default(PENDING)
+
+  /// Deposit taken to discourage no-shows. Null when none was asked.
+  depositAmount Decimal? @map("deposit_amount") @db.Decimal(14, 2)
+
+  note        String? @db.Text
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  table     Table?   @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("ReservationAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+  orders    Order[]
+
+  @@index([businessId, reservedAt])
+  @@index([businessId, status, reservedAt])
+  @@index([tableId, reservedAt])
+  @@map("reservation")
+}
+
+/// Where a customer collects a takeaway order — a counter, a locker, a kerbside bay.
+///
+/// A table rather than a text field on the order, because a customer needs to be told the
+/// same thing every time ("stand at the blue pole"), and free text produces a slightly
+/// different answer every time someone types it.
+model PickupPoint {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  locationId String? @map("location_id")
+
+  name         String   @db.VarChar(160)
+  instructions String?  @db.Text
+  /// Optional coordinates, for a storefront map or a courier hand-off.
+  latitude     Decimal? @db.Decimal(9, 6)
+  longitude    Decimal? @db.Decimal(9, 6)
+
+  isActive Boolean @default(true) @map("is_active")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location StockLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  orders   Order[]
+
+  @@unique([businessId, name])
+  @@index([businessId, isActive])
+  @@map("pickup_point")
+}
