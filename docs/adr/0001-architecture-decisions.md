@@ -49,6 +49,15 @@ Constraints that shaped this ADR:
 
 ### D1 — NestJS over Express
 
+**Amendment (2026-09-27, milestone M1)** — pinned to **NestJS 11**, not the current
+major. NestJS **12 is ESM-only** (`"type": "module"`, no `require` condition in its
+exports), and NestJS's dependency injection depends on TypeScript's
+`emitDecoratorMetadata`, which esbuild and Oxc do not emit. Adopting Nest 12 today
+would therefore require an SWC-based test transform for that metadata. Nest 11 keeps
+the fully supported path — `tsc`, CommonJS, Jest — and the plan named Nest 11 to begin
+with. Moving to 12 is a deliberate future milestone, not something to slip into the
+socle. Revisit when the ESM + decorator-metadata tooling is settled.
+
 **Why**: modules and dependency injection map directly onto the bounded contexts of this product; guards and
 interceptors let us enforce RBAC, tenant isolation and subscription entitlements **declaratively on every route**
 instead of repeating middleware by hand; `@nestjs/swagger` generates the OpenAPI document that feeds a typed client
@@ -70,6 +79,27 @@ migrations and a clean seeding path.
 
 **Operational rules**: the application uses the **pooled** connection string; migrations use the **direct** URL;
 `prisma migrate deploy` is the only production path, and `db push` is restricted to local development.
+
+**Amendment (2026-09-27, milestone M1)** — implemented on **Prisma 7.10.0**, which changed
+four things this decision has to account for:
+
+1. `url` and `directUrl` are **no longer accepted in `schema.prisma`**; connection URLs
+   moved to `prisma.config.ts`. The pooled/direct split therefore lives in two files
+   now: `prisma.config.ts` (CLI → direct URL) and `PrismaService` (runtime → pooled URL
+   through the `PrismaPg` driver adapter).
+2. The runtime client **requires a driver adapter** (`adapter`) or Accelerate — it no
+   longer reads a URL from the environment by itself.
+3. The generator provider is now `prisma-client`, and `output` is **mandatory**; the
+   client is imported from that path rather than from `@prisma/client`.
+4. `prisma.config.ts` must sit beside the package that declares the `prisma`
+   dependency, so the schema moved from the repository root to `apps/api/prisma/`.
+   The generated client also lives inside `src/` because the API compiles with
+   `rootDir: src`.
+
+The decision itself is unchanged — PostgreSQL on Neon with Prisma — and the runtime
+versus migration URL separation is preserved, just expressed in Prisma 7's terms.
+`@prisma/client` remains a runtime dependency because the generated client imports
+`@prisma/client/runtime/client`.
 
 **Rejected — Supabase**: the repository already contains a Supabase KV stub
 (`src/app/supabase/functions/server/`), but it is a key-value store, not a relational model. Adopting it would mix

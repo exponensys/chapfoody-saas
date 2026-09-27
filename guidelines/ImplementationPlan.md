@@ -430,7 +430,7 @@ fully readable, which is what M4 and M8 use it for, and the snapshot is verified
 
 ---
 
-### M1 — NestJS socle `[ ]`
+### M1 — NestJS socle `[x]`
 
 **Maps to**: E, G. **Depends on**: M0.
 
@@ -459,6 +459,22 @@ envelope shape, worker job round trip, config validation failure.
 
 **Risques** — Neon pooling versus Prisma connection exhaustion → `connection_limit=1` on the pooled URL for
 serverless runtimes, documented in the API README and load-tested in M14.
+
+**Verification status (2026-09-27)** — implemented and verified locally: `pnpm lint`, `pnpm typecheck`, `pnpm build`
+and `pnpm test` are green (**21 suites, 136 tests, 2 suites skipped** because they need a real database/Redis), coverage
+is **92.4 % statements / 83.2 % branches / 96.3 % functions** with thresholds enforced, and the built server was
+exercised over HTTP (`/health`, `/health/db`, `/health/queue`, `/v1/meta`, `/docs` → 200, the French error envelope, an
+echoed `x-request-id`). The worker was checked to fail fast when Redis is missing or unreachable, and the OpenAPI
+document was exported to `packages/api-client/openapi.json`.
+
+**Deviations recorded while implementing M1** (all forced by upstream reality, not preference):
+
+| Plan said | What was done | Why |
+|---|---|---|
+| NestJS 11 | **NestJS 11.2.6** — confirmed, not changed | NestJS **12 is ESM-only** (`"type": "module"`, no `require` condition). Adopting it would require an SWC-based transform for `emitDecoratorMetadata` in tests. Nest 11 keeps the fully supported CommonJS + tsc + Jest path. Recorded as a future milestone, not smuggled into the socle. |
+| Jest + Supertest | **Jest + ts-jest + Supertest** — as planned | Once Nest 11 was pinned, Jest works with one extra setting (`moduleNameMapper` so `.js`-suffixed imports resolve to the TypeScript source). |
+| Prisma on Neon | **Prisma 7.10.0 with a driver adapter** | Prisma 7 removed `url`/`directUrl` from `schema.prisma`, made the generator `output` mandatory, renamed the provider to `prisma-client`, and requires `PrismaPg` at runtime. The pooled/direct split moved to two places: `prisma.config.ts` (CLI → direct) and `PrismaService` (runtime → pooled). |
+| `prisma/` at the repository root | **`apps/api/prisma/`** | Prisma 7 requires `prisma.config.ts` beside the package that declares the `prisma` dependency, and validates that layout. The generated client also has to sit inside `src/` because the API compiles with `rootDir: src`. |
 
 ---
 
@@ -1144,8 +1160,8 @@ Status legend: `[ ]` not started · `[~]` in progress · `[x]` done · `[!]` blo
 
 | Req | Requirement | Milestone | Status |
 |---|---|---|---|
-| E | Backend handling: NestJS or Express proposed, with the best option chosen for this kind of project | M1 + ADR-0001 | `[x]` (decided: **NestJS**, justified in ADR-0001 §D1) |
-| F.1 | Database: PostgreSQL with Prisma on Neon | M2 | `[x]` (validated in ADR-0001 §D2; implementation in M2) |
+| E | Backend handling: NestJS or Express proposed, with the best option chosen for this kind of project | M1 + ADR-0001 | `[x]` (**NestJS 11** implemented in M1; justification in ADR-0001 §D1, including why not the ESM-only Nest 12) |
+| F.1 | Database: PostgreSQL with Prisma on Neon | M2 | `[~]` (ADR-0001 §D2 validated; Prisma 7 + driver adapter wired in M1, schema and migrations in M2) |
 | F.2 | Create the super-admin and per-client admin accounts exactly as specified | M2 | `[ ]` |
 | G.1 | TDD architecture | M0 onward | `[~]` (M0: Vitest wired in all 6 workspaces, 7 suites / 49 tests green; Jest + Supertest + Testcontainers for the API in M1) |
 | G.2 | Separate folders for backend, frontend (landing page and client selling website) and dashboards; each dashboard with its own folder and components | M0 + M3 + M8 | `[~]` (M0: monorepo, `apps/` + `packages/`, per-dashboard folder rule documented; NestJS modules in M1, dashboards in M8) |
@@ -1190,6 +1206,44 @@ Appended at the end of every milestone, newest first.
 ```
 
 **Entries**
+
+### 2026-09-27 — M1 — done (NestJS socle)
+
+- **Done**: the API is now a production-shaped NestJS 11 service. Typed fail-fast configuration (the only module
+  reading `process.env`), structured pino logging with request-id correlation, a global `ValidationPipe`
+  (`whitelist` + `forbidNonWhitelisted`), a single exception filter emitting the stable error envelope, the three health
+  probes, `/v1/meta`, OpenAPI at `/docs` with an export script, `PrismaModule` on Prisma 7's driver adapter,
+  `QueueModule` with an optional Redis connection, a no-op queue consumer and a separate `worker.ts` entrypoint. Docs
+  updated: API README, `.env.example`, ADR-0001 amendments.
+- **Tests added**: **21 suites / 136 tests passing, 2 integration suites skipped** (needs real Postgres/Redis).
+  Coverage **92.4 % statements / 83.2 % branches / 96.3 % functions**, above the plan's thresholds (80/70/80/80) and
+  enforced in CI. A `test:coverage` task and CI job were added, plus a CI `integration` job with Postgres and Redis
+  service containers.
+- **Verified by running it**: `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:coverage` and `pnpm build` green
+  across the monorepo; the built server exercised over HTTP (`/health`, `/health/db`, `/health/queue`, `/v1/meta`,
+  `/docs` → 200, the French error envelope, an echoed `x-request-id`); the worker confirmed to fail fast on a missing
+  or unreachable Redis; `openapi:export` confirmed to write `packages/api-client/openapi.json`.
+- **Blocked / open**: the two integration suites are skipped locally because **Docker is still not installed** and no
+  `INTEGRATION_*` URLs are available — they run in CI against service containers. The Docker Definition-of-Done item
+  from M0 therefore remains unverified on this machine.
+- **Three upstream realities forced deviations**, all recorded in the plan (§M1) and ADR-0001 rather than absorbed
+  silently:
+  1. **NestJS 12 is ESM-only** → stayed on NestJS 11.2.6, the plan's own choice, because NestJS DI needs TypeScript's
+     `emitDecoratorMetadata`, which esbuild and Oxc do not emit.
+  2. **Prisma 7 removed `url`/`directUrl` from the schema**, requires a driver adapter, renamed the generator to
+     `prisma-client` with a mandatory `output`, and needs `prisma.config.ts` beside the package that declares Prisma →
+     the pooled/direct split now lives in `prisma.config.ts` (CLI) and `PrismaService` (runtime), and the schema moved
+     to `apps/api/prisma/`.
+  3. **`@nestjs/bullmq@12` is ESM-only** → pinned `@nestjs/bullmq@11` + `bullmq@5`, keeping the whole API stack
+     CommonJS.
+- **Bugs found by the tests during M1** (each fixed, with a regression test): `HealthService` could not resolve its
+  dependencies because `HealthModule` never imported their providers — the API would have failed to boot in production;
+  Express's `Cannot GET /v1/x` and Nest's English `Not Found` were reaching clients in a French product; the response
+  advertised `x-powered-by: Express`; `testMatch` silently skipped the entire e2e suite; `rm -rf dist` combined with
+  `tsc` incremental state made the build emit nothing; the worker exited silently instead of failing when Redis was
+  missing or unreachable.
+- **Next**: M2 — the full Prisma domain schema, RLS multi-tenancy, migrations and the seed with the eight required
+  accounts.
 
 ### 2026-09-27 — M0 — done, with three Definition-of-Done items unverifiable in this environment
 
