@@ -1,0 +1,103 @@
+// Payroll — the periodic run that turns contracts and hours into money owed.
+//
+// ── Why a run is a document, not a computation ───────────────────────────────
+// A payroll run is approved, paid and filed. Its figures must stop moving the moment it is approved,
+// which is why the totals are stored here and on each payslip rather than derived on read: an
+// employee's payslip for March is a statement that was given to them, and recomputing it in June
+// from a contract that has since been amended would produce a different document with the same date.
+
+/// One payroll period for one business.
+model PayrollRun {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  periodStart DateTime @map("period_start") @db.Date
+  periodEnd   DateTime @map("period_end") @db.Date
+
+  status PayrollStatus @default(DRAFT)
+
+  /// Gross pay before any deduction: what the employer owes before contributions.
+  grossTotal                Decimal @default(0) @map("gross_total") @db.Decimal(14, 2)
+  /// Bonuses and deductions are summed on the run as well as per payslip, so that the run's net
+  /// reconciles exactly: net = gross + bonuses − deductions − the employees' contributions.
+  bonusTotal                Decimal @default(0) @map("bonus_total") @db.Decimal(14, 2)
+  deductionTotal            Decimal @default(0) @map("deduction_total") @db.Decimal(14, 2)
+  /// The employee's share of contributions, withheld from gross.
+  employeeContributionTotal Decimal @default(0) @map("employee_contribution_total") @db.Decimal(14, 2)
+  /// The employer's share, which is an additional cost rather than a deduction. Kept apart because
+  /// conflating the two is the classic payroll error: it understates the cost of employment.
+  employerContributionTotal Decimal @default(0) @map("employer_contribution_total") @db.Decimal(14, 2)
+  /// What the employees actually receive: gross less their share.
+  netTotal                  Decimal @default(0) @map("net_total") @db.Decimal(14, 2)
+
+  currency String @default("EUR") @db.Char(3)
+
+  /// The accounting entry this run produced. Payroll is a cost, so it belongs in the ledger, and
+  /// linking the two is what lets an accountant reconcile a wage bill to a journal.
+  journalEntryId String? @unique @map("journal_entry_id")
+
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+  paidAt       DateTime? @map("paid_at")
+
+  createdById String? @map("created_by_id")
+
+  notes String? @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  journalEntry JournalEntry? @relation(fields: [journalEntryId], references: [id], onDelete: SetNull)
+  approvedBy   User?         @relation("PayrollRunApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+  createdBy    User?         @relation("PayrollRunAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  payslips Payslip[]
+
+  /// One run per period per business: running a period twice would double the wage bill.
+  @@unique([businessId, periodStart, periodEnd])
+  @@index([businessId, status, periodStart])
+  @@map("payroll_run")
+}
+
+/// One employee's pay for one run.
+model Payslip {
+  id           String @id @default(cuid())
+  businessId   String @map("business_id")
+  payrollRunId String @map("payroll_run_id")
+  employeeId   String @map("employee_id")
+
+  /// The contract IN FORCE during the period. Referenced rather than reconstructed from the
+  /// employee's current terms, which may have changed since.
+  contractId String? @map("contract_id")
+
+  /// Hours worked, when pay is hourly. Null for a salaried employee, where the figure is the month.
+  hours Decimal? @db.Decimal(7, 2)
+
+  grossAmount                Decimal @map("gross_amount") @db.Decimal(14, 2)
+  employeeContributionAmount Decimal @default(0) @map("employee_contribution_amount") @db.Decimal(14, 2)
+  employerContributionAmount Decimal @default(0) @map("employer_contribution_amount") @db.Decimal(14, 2)
+  netAmount                  Decimal @map("net_amount") @db.Decimal(14, 2)
+
+  /// Bonuses and deductions as separate lines, so a payslip can be read without arithmetic.
+  bonusAmount     Decimal @default(0) @map("bonus_amount") @db.Decimal(14, 2)
+  deductionAmount Decimal @default(0) @map("deduction_amount") @db.Decimal(14, 2)
+
+  currency String @default("EUR") @db.Char(3)
+
+  pdfUrl String? @map("pdf_url") @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business   @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  payrollRun PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee   Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  contract   Contract?  @relation(fields: [contractId], references: [id], onDelete: SetNull)
+
+  /// One payslip per employee per run.
+  @@unique([payrollRunId, employeeId])
+  @@index([businessId])
+  @@index([employeeId])
+  @@map("payslip")
+}

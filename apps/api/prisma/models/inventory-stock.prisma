@@ -37,6 +37,8 @@ model StockLocation {
 
   // And it has a till, with one session open at a time.
   posSessions PosSession[]
+  // Staff are rostered to a site, not to the business in the abstract.
+  shifts      Shift[]
 
   @@unique([businessId, name])
   @@index([businessId, isActive, name])

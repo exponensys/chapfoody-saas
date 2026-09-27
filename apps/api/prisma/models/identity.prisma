@@ -86,6 +86,14 @@ model User {
   vendorProfiles Vendor[] @relation("VendorUser")
   vendorsCreated Vendor[] @relation("VendorAuthor")
 
+  // HR: an employee may or may not sign in; approvals record who put their name to a payroll figure.
+  employeeProfiles    Employee[]   @relation("EmployeeUser")
+  employeesCreated    Employee[]   @relation("EmployeeAuthor")
+  shiftsCreated       Shift[]      @relation("ShiftAuthor")
+  timeEntriesApproved TimeEntry[]  @relation("TimeEntryApprover")
+  payrollRunsApproved PayrollRun[] @relation("PayrollRunApprover")
+  payrollRunsCreated  PayrollRun[] @relation("PayrollRunAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

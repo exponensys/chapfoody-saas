@@ -48,6 +48,7 @@ import { seedStock } from './seed/stock.js';
 import { seedPosSession, seedTenders, seedVatRates } from './seed/till.js';
 import { seedChartOfAccounts, seedSalesAccounting } from './seed/accounting.js';
 import { seedVendors } from './seed/vendors.js';
+import { seedHr } from './seed/hr.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -218,6 +219,13 @@ interface SeedTally {
   commissionRules: number;
   vendorAssignments: number;
   vendorTargets: number;
+  employees: number;
+  contracts: number;
+  shifts: number;
+  timeEntries: number;
+  payrollRuns: number;
+  payslips: number;
+  payrollEntries: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -244,6 +252,13 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     commissionRules: 0,
     vendorAssignments: 0,
     vendorTargets: 0,
+    employees: 0,
+    contracts: 0,
+    shifts: 0,
+    timeEntries: 0,
+    payrollRuns: 0,
+    payslips: 0,
+    payrollEntries: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -461,6 +476,18 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.commissionRules += vendorBooks.commissionRules;
         tally.vendorAssignments += vendorBooks.assignments;
         tally.vendorTargets += vendorBooks.targets;
+
+        // ── HR and payroll ─────────────────────────────────────────────────────
+        // Payroll posts to the ledger, which is why it needs the chart built just above: the entry
+        // debits a wage cost and credits what the staff and the state are owed.
+        const hr = await seedHr(tx, tenant.id, business.currency, user.id, chart.idByCode);
+        tally.employees += hr.employees;
+        tally.contracts += hr.contracts;
+        tally.shifts += hr.shifts;
+        tally.timeEntries += hr.timeEntries;
+        tally.payrollRuns += hr.payrollRuns;
+        tally.payslips += hr.payslips;
+        tally.payrollEntries += hr.payrollEntries;
       }
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
@@ -534,6 +561,10 @@ async function main(): Promise<void> {
         `${tally.snapshots} bilans\n` +
         `  vendeurs  : ${tally.vendors} vendeurs, ${tally.commissionRules} règles, ` +
         `${tally.vendorAssignments} commissions, ${tally.vendorTargets} objectifs\n` +
+        `  personnel : ${tally.employees} employés, ${tally.contracts} contrats, ` +
+        `${tally.shifts} shifts, ${tally.timeEntries} pointages\n` +
+        `  paie      : ${tally.payrollRuns} bulletins de paie, ${tally.payslips} bulletins, ` +
+        `${tally.payrollEntries} écritures\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

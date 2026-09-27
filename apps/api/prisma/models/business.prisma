@@ -150,6 +150,14 @@ model Business {
   vendorAssignments     VendorAssignment[]
   vendorTargets         VendorTarget[]
 
+  // ── HR and payroll ─────────────────────────────────────────────────────────
+  employees   Employee[]
+  contracts   Contract[]
+  shifts      Shift[]
+  timeEntries TimeEntry[]
+  payrollRuns PayrollRun[]
+  payslips    Payslip[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

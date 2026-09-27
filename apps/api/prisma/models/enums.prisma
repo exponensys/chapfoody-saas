@@ -456,3 +456,62 @@ enum CommissionScope {
 
   @@map("commission_scope")
 }
+
+// ── HR and payroll ───────────────────────────────────────────────────────────
+
+enum EmployeeStatus {
+  ACTIVE
+  /// Still employed, not currently working: sick leave, parental leave, sabbatical.
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+
+  @@map("employee_status")
+}
+
+/// The nature of the employment relationship, which decides what payroll owes and what the law
+/// requires of it. Kept as an enum because these are legal categories, not a business's own labels.
+enum ContractType {
+  PERMANENT
+  FIXED_TERM
+  TEMPORARY
+  INTERNSHIP
+  APPRENTICESHIP
+  FREELANCE
+
+  @@map("contract_type")
+}
+
+enum ShiftStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  /// The employee did not turn up. Distinct from CANCELED, which is the business's doing —
+  /// the two are treated very differently by a manager, and by the law.
+  ABSENT
+  CANCELED
+
+  @@map("shift_status")
+}
+
+/// Where a clock-in came from. Matters for trust: a POS terminal clock-in is harder to fake than a
+/// manual entry typed the next morning at the desk.
+enum TimeEntrySource {
+  MANUAL
+  POS
+  MOBILE
+  IMPORT
+
+  @@map("time_entry_source")
+}
+
+enum PayrollStatus {
+  DRAFT
+  CALCULATED
+  APPROVED
+  PAID
+  CANCELED
+
+  @@map("payroll_status")
+}

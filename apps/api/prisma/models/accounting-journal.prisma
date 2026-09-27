@@ -104,6 +104,8 @@ model JournalEntry {
   lines        JournalLine[]
   salesEntries SalesJournalEntry[]
   documents    Document[]
+  /// The payroll run this entry accounts for, when it came from payroll. One-to-one.
+  payrollRun   PayrollRun?
 
   @@unique([businessId, number])
   @@index([businessId, entryDate])

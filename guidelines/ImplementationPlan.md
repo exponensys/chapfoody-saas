@@ -484,11 +484,16 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 7/N)** — Ten domain groups are done and verified on a real PostgreSQL (local 18.3 and
+**Avancement (increment 8/N)** — Eleven domain groups are done and verified on a real PostgreSQL (local 18.3 and
 Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till
-with payments and tax, accounting, and vendors. 74 models (75 tables), 41 enum types, 16 migrations, 15
-tenant-isolation integration tests and 18 schema/seed guards, all green. Four domain groups remain: HR, delivery,
-affiliate, and marketing/content/storefront/customers.
+with payments and tax, accounting, vendors, and HR with payroll. 80 models (81 tables), 46 enum types, 18
+migrations, 15 tenant-isolation integration tests and 18 schema/seed guards, all green. Three domain groups remain:
+delivery, affiliate, and marketing/content/storefront/customers.
+
+Payroll is the first domain that CROSSES the schema in both directions: it reads the chart of accounts and writes a
+journal entry, which is what the accounting increment was for. The entry debits a wage cost (gross plus the
+employer's contribution) and credits what the staff and the state are owed — with the employer's share on the COST
+side, because treating it as a deduction would understate what an employee costs.
 
 Four mechanisms now do work that would otherwise be re-derived per domain.
 
@@ -511,6 +516,14 @@ round(total_liabilities + total_equity, 2) = total_assets                       
 
 Uniqueness a Prisma key cannot express is enforced by partial indexes: one open till per location, one default stock
 location per business, one price per target per list, one default order type.
+
+And a rule about two ROWS rather than one — enforced by an EXCLUDE constraint over a date range, which is the only
+way SQL can say it. An employee's contracts may not cover the same day, so a permanent contract and a later
+fixed-term amendment conflict instead of quietly coexisting and paying twice:
+
+```sql
+EXCLUDE USING gist ("employee_id" WITH =, daterange("start_date", COALESCE("end_date", 'infinity'), '[)') WITH &&)
+```
 
 And the one invariant no CHECK can express — that a journal entry's lines add up to its totals, and that it balances
 — is enforced by a DEFERRABLE constraint trigger. Deferred matters: within a transaction the debit and credit lines

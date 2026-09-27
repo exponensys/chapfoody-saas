@@ -162,6 +162,13 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'VendorAssignment',
   'VendorCommissionRule',
   'VendorTarget',
+  // HR and payroll (M2, increment 8)
+  'Contract',
+  'Employee',
+  'PayrollRun',
+  'Payslip',
+  'Shift',
+  'TimeEntry',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

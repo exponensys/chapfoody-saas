@@ -1,0 +1,201 @@
+// HR — who works here, on what terms, and when.
+//
+// ── An employee is not an account, for the same reason a vendor is not ────────
+// Many staff never sign in: a kitchen porter has a contract and a payslip and no login. So
+// `userId` is nullable on Employee. The opposite case also exists — a manager is both a
+// BusinessMember and an Employee — which is why the two records are linked rather than merged: the
+// membership answers "what may this person do", the employee record answers "what do we owe them".
+
+/// Someone the business employs.
+model Employee {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// Set when the employee also has an account. Nullable: most do not.
+  userId String? @map("user_id")
+
+  /// The number payroll and an accountant refer to: "S-001".
+  employeeNumber String @map("employee_number") @db.VarChar(32)
+
+  firstName String    @map("first_name") @db.VarChar(120)
+  lastName  String    @map("last_name") @db.VarChar(120)
+  email     String?   @db.VarChar(320)
+  phone     String?   @db.VarChar(32)
+  /// A calendar date, not an instant: payroll contributions and some labour rules depend on age, and
+  /// nobody is born at 14:37.
+  birthDate DateTime? @map("birth_date") @db.Date
+
+  addressLine String? @map("address_line") @db.VarChar(200)
+  city        String? @db.VarChar(120)
+  postalCode  String? @map("postal_code") @db.VarChar(32)
+  country     String? @db.Char(2)
+
+  jobTitle String? @map("job_title") @db.VarChar(160)
+
+  status  EmployeeStatus @default(ACTIVE)
+  /// Employment dates are CALENDAR dates, not instants — which is also what makes the contract
+  /// overlap rule expressible as a date range in the migration.
+  hiredAt DateTime       @map("hired_at") @db.Date
+  /// Set when the relationship ends, whatever the reason.
+  endedAt DateTime?      @map("ended_at") @db.Date
+
+  notes String? @db.Text
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user      User?    @relation("EmployeeUser", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("EmployeeAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  contracts   Contract[]
+  shifts      Shift[]
+  timeEntries TimeEntry[]
+  payslips    Payslip[]
+
+  @@unique([businessId, employeeNumber])
+  @@index([businessId, status])
+  @@index([userId])
+  @@map("employee")
+}
+
+/// The terms someone is employed on.
+///
+/// A TERM, not a field: a pay rise or a move from fixed-term to permanent is a new contract, and the
+/// old one stays readable. That is why there is a date range and why a payroll run references the
+/// contract that was in force, rather than the employee's current one.
+model Contract {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  employeeId String @map("employee_id")
+
+  type ContractType
+
+  startDate DateTime  @map("start_date") @db.Date
+  /// Null means open-ended. The database still treats it as a range, ending at infinity, so the
+  /// overlap rule can be stated once for both cases.
+  endDate   DateTime? @map("end_date") @db.Date
+
+  jobTitle    String?  @map("job_title") @db.VarChar(160)
+  weeklyHours Decimal? @map("weekly_hours") @db.Decimal(5, 2)
+
+  /// At least one of these must be set, enforced by a CHECK: a contract that promises neither a
+  /// salary nor an hourly rate is not an employment contract, it is a misunderstanding.
+  monthlySalary Decimal? @map("monthly_salary") @db.Decimal(14, 2)
+  hourlyRate    Decimal? @map("hourly_rate") @db.Decimal(14, 2)
+  currency      String   @default("EUR") @db.Char(3)
+
+  signedAt    DateTime? @map("signed_at")
+  documentUrl String?   @map("document_url") @db.Text
+  notes       String?   @db.Text
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  payslips Payslip[]
+
+  /// An employee's contracts may not overlap in time — enforced by an EXCLUDE constraint in the
+  /// migration, which is the only way to state "no two ranges intersect" in SQL.
+  @@index([employeeId, startDate])
+  @@index([businessId, type])
+  @@map("contract")
+}
+
+/// A scheduled period of work.
+///
+/// Separate from TimeEntry, and the distinction matters: this is what was PLANNED, that is what
+/// HAPPENED. Payroll is computed from the second, and a manager compares the two — a shift with no
+/// time entry is an absence, and a time entry with no shift is overtime nobody scheduled.
+model Shift {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  /// Where the shift is worked. Nullable for a business with a single site.
+  locationId String? @map("location_id")
+  employeeId String  @map("employee_id")
+
+  startsAt DateTime @map("starts_at")
+  endsAt   DateTime @map("ends_at")
+
+  /// Unpaid break, in minutes. Subtracted from the worked time rather than the paid one, because
+  /// that is what a labour inspector asks about.
+  breakMinutes Int @default(0) @map("break_minutes")
+
+  /// The role being worked, when it differs from the employee's usual one — a manager covering a
+  /// till. Nullable rather than defaulted: "not specified" and "CASHIER" are different answers.
+  role RoleKey?
+
+  status ShiftStatus @default(SCHEDULED)
+
+  notes String? @db.Text
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business       @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  location  StockLocation? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+  employee  Employee       @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  createdBy User?          @relation("ShiftAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  timeEntries TimeEntry[]
+
+  @@index([businessId, startsAt])
+  @@index([employeeId, startsAt])
+  @@index([locationId, startsAt])
+  @@map("shift")
+}
+
+/// What actually happened: a clock-in, and eventually a clock-out.
+///
+/// ── clockOutAt is nullable, and that is the point ────────────────────────────
+/// An open entry is someone currently at work. Making clock-out mandatory at insert would mean
+/// either a placeholder timestamp (a lie) or no row at all (invisible work) — so the row exists from
+/// the clock-in, and `workedMinutes` stays null until there is something to compute.
+///
+/// `workedMinutes` is stored even though it is derivable, and a CHECK keeps it equal to the
+/// difference — the same reasoning as the stock ledger's running balance: a stored figure that is
+/// asserted is a figure that can be reported on, and a disagreement is an error rather than a
+/// silent difference of opinion.
+model TimeEntry {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  employeeId String  @map("employee_id")
+  /// The shift this fulfils, when there was one.
+  shiftId    String? @map("shift_id")
+
+  clockInAt  DateTime  @map("clock_in_at")
+  /// Null while the employee is still at work.
+  clockOutAt DateTime? @map("clock_out_at")
+
+  breakMinutes  Int  @default(0) @map("break_minutes")
+  /// Minutes actually worked: the elapsed time less the break. Null until clock-out.
+  workedMinutes Int? @map("worked_minutes")
+
+  source TimeEntrySource @default(MANUAL)
+
+  note String? @db.Text
+
+  /// Who signed it off. Unapproved time is not payable, and an approved entry is a statement someone
+  /// put their name to — which is why both fields move together.
+  approvedById String?   @map("approved_by_id")
+  approvedAt   DateTime? @map("approved_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift      Shift?   @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  approvedBy User?    @relation("TimeEntryApprover", fields: [approvedById], references: [id], onDelete: SetNull)
+
+  @@index([businessId, clockInAt])
+  @@index([employeeId, clockInAt])
+  @@index([shiftId])
+  @@map("time_entry")
+}

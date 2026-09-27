@@ -37,11 +37,14 @@ const CHART: readonly {
 }[] = [
   { code: '401', name: 'Fournisseurs', type: 'LIABILITY' },
   { code: '411', name: 'Clients', type: 'ASSET' },
+  { code: '421', name: 'Personnel — rémunérations dues', type: 'LIABILITY' },
   { code: '427', name: 'Pourboires à reverser', type: 'LIABILITY' },
+  { code: '431', name: 'Sécurité sociale', type: 'LIABILITY' },
   { code: '44571', name: 'TVA collectée', type: 'LIABILITY' },
   { code: '512', name: 'Banque', type: 'ASSET' },
   { code: '530', name: 'Caisse', type: 'ASSET' },
   { code: '607', name: 'Achats de marchandises', type: 'EXPENSE' },
+  { code: '641', name: 'Rémunérations du personnel', type: 'EXPENSE' },
   { code: '707', name: 'Ventes de marchandises', type: 'REVENUE' },
 ];
 
