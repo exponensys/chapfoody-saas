@@ -106,6 +106,11 @@ model User {
   payoutsApproved     Payout[]     @relation("PayoutApprover")
   payoutsCreated      Payout[]     @relation("PayoutAuthor")
 
+  // Customers: a storefront account, plus who captured the customer and who wrote a note.
+  customerAccounts Customer[]     @relation("CustomerAccount")
+  customersCreated Customer[]     @relation("CustomerAuthor")
+  customerNotes    CustomerNote[] @relation("CustomerNoteAuthor")
+
   @@index([status])
   @@index([platformRole])
   @@index([deletedAt])

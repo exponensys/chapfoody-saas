@@ -172,6 +172,81 @@ describeWhenConfigured('Tenant isolation (integration)', () => {
     expect(stolen).toEqual([]);
   });
 
+  it("keeps a tenant's customers and their consent history to itself", async () => {
+    // Customers are the most sensitive rows in the schema, and consent is the one thing here that
+    // exists specifically to be produced as evidence — so both halves are checked: another tenant
+    // must not READ them, and must not be able to FILE a consent event against them.
+    //
+    // The probe rows are deliberately not cleaned up. `customer_consent` is append-only, so the
+    // consent event below cannot be deleted and neither, therefore, can the customer it references.
+    // That is the design working, not a leaky test: an audit trail that a test could tidy away
+    // would not be one.
+    const customer = await runAsTenant(
+      prisma,
+      { businessId: tenantA, userId: ownerA },
+      (tx) =>
+        tx.customer.create({
+          data: {
+            businessId: tenantA,
+            number: `ISO-${suffix}`,
+            firstName: 'Probe',
+            email: `iso-${suffix}@probe.test`,
+            status: 'ACTIVE',
+            source: 'MANUAL',
+          },
+        }),
+    );
+
+    await runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>
+      tx.customerConsent.create({
+        data: {
+          businessId: tenantA,
+          customerId: customer.id,
+          channel: 'EMAIL',
+          purpose: 'MARKETING',
+          status: 'GRANTED',
+          source: 'WEB',
+          // Required by a CHECK: a grant that records neither the wording nor its version proves
+          // nothing, and the constraint refuses it rather than trusting the caller.
+          policyVersion: 'v1',
+        },
+      }),
+    );
+
+    // Tenant B, asking for everything and then asking for the row by name.
+    const leaked = await runAsTenant(
+      prisma,
+      { businessId: tenantB, userId: ownerB },
+      async (tx) => ({
+        all: await tx.customer.findMany({ select: { id: true } }),
+        byId: await tx.customer.findMany({ where: { id: customer.id } }),
+        consents: await tx.customerConsent.findMany({ select: { id: true } }),
+      }),
+    );
+
+    expect(leaked.all).toEqual([]);
+    expect(leaked.byId).toEqual([]);
+    expect(leaked.consents).toEqual([]);
+
+    // And tenant B cannot file consent against tenant A's customer. The scoping extension rewrites
+    // the businessId, so this is refused by the INSERT policy rather than silently re-homed.
+    await expect(
+      runAsTenant(prisma, { businessId: tenantB, userId: ownerB }, (tx) =>
+        tx.customerConsent.create({
+          data: {
+            businessId: tenantA,
+            customerId: customer.id,
+            channel: 'SMS',
+            purpose: 'MARKETING',
+            status: 'GRANTED',
+            source: 'WEB',
+            policyVersion: 'v1',
+          },
+        }),
+      ),
+    ).rejects.toThrow();
+  });
+
   it('refuses a write that names another tenant', async () => {
     await expect(
       runAsTenant(prisma, { businessId: tenantA, userId: ownerA }, (tx) =>

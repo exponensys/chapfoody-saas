@@ -148,6 +148,9 @@ export async function seedOrders(
   orderTypeIdByCode: ReadonlyMap<string, string>,
   locationId: string,
   posSessionId: string,
+  /// Who bought it. Null is a legitimate value — a walk-in is still a sale — but the demo attaches
+  /// its orders to the known customer so the customer card has an order history to show.
+  customerId: string | null = null,
 ): Promise<number> {
   const products = catalog.categories.flatMap((category) => category.products);
   const orderTypeId = orderTypeIdByCode.get('dine-in') ?? orderTypeIdByCode.get('takeaway');
@@ -168,10 +171,19 @@ export async function seedOrders(
   for (const plan of plans) {
     const already = await tx.order.findFirst({
       where: { businessId, number: plan.number },
-      select: { id: true },
+      select: { id: true, customerId: true },
     });
 
     if (already !== null) {
+      // CONVERGE, do not merely skip. A database seeded before customers existed has these orders
+      // with no customer_id, and skipping outright would leave them unattached forever — after which
+      // the reconciliation would compute zero orders for their customer and look perfectly correct
+      // while being wrong. Only a null is filled: an order someone has since re-assigned is left
+      // alone, because that edit was deliberate and this is a seed.
+      if (already.customerId === null && customerId !== null) {
+        await tx.order.update({ where: { id: already.id }, data: { customerId } });
+      }
+
       continue;
     }
 
@@ -186,6 +198,7 @@ export async function seedOrders(
         placedAt: new Date(),
         currency,
         posSessionId,
+        customerId,
         // Filled in below once the lines are priced. Zero is a valid intermediate state, and
         // the whole write happens in one transaction, so nobody observes it.
         subtotal: '0.00',

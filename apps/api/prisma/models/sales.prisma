@@ -66,6 +66,14 @@ model Order {
   /// Set when the order honours a booking, so the reservation can be marked SEATED.
   reservationId String? @map("reservation_id")
 
+  /// Who bought it, when they are known. Nullable, and null for many counter sales — a walk-in is
+  /// still a sale, and inventing a customer for one would corrupt every customer metric there is.
+  ///
+  /// This does NOT replace the free-text delivery fields below. Those are the address the customer
+  /// gave on the night; this is who they are. A customer who moves house next month must not change
+  /// where last month's order went.
+  customerId String? @map("customer_id")
+
   /// Sequential per tenant, and what staff, customers and receipts call it: "2026-000142".
   number  String       @db.VarChar(32)
   channel OrderChannel @default(POS)
@@ -126,6 +134,7 @@ model Order {
   table       Table?         @relation(fields: [tableId], references: [id], onDelete: SetNull)
   pickupPoint PickupPoint?   @relation(fields: [pickupPointId], references: [id], onDelete: SetNull)
   reservation Reservation?   @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  customer    Customer?      @relation(fields: [customerId], references: [id], onDelete: SetNull)
   createdBy   User?          @relation("OrderAuthor", fields: [createdById], references: [id], onDelete: SetNull)
   posSession  PosSession?    @relation(fields: [posSessionId], references: [id], onDelete: SetNull)
 
@@ -145,6 +154,8 @@ model Order {
   @@index([businessId, status, placedAt])
   @@index([businessId, placedAt])
   @@index([businessId, orderTypeId, placedAt])
+  /// A customer's order history, which is the first thing any staff member opens on their card.
+  @@index([customerId, placedAt])
   @@index([tableId])
   @@map("customer_order")
 }

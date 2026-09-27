@@ -210,6 +210,11 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'Payout',
   'Referral',
   'ReferralLink',
+  // Customers (M2, increment 11)
+  'Customer',
+  'CustomerAddress',
+  'CustomerConsent',
+  'CustomerNote',
   // Subscriptions and billing
   'Entitlement',
   'Invitation',

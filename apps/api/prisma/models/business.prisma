@@ -175,6 +175,12 @@ model Business {
   commissions   Commission[]
   payouts       Payout[]
 
+  // ── Customers ──────────────────────────────────────────────────────────────
+  customers         Customer[]
+  customerAddresses CustomerAddress[]
+  customerNotes     CustomerNote[]
+  customerConsents  CustomerConsent[]
+
   @@index([businessTypeId])
   @@index([ownerId])
   @@index([status])

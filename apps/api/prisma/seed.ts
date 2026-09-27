@@ -51,6 +51,7 @@ import { seedVendors } from './seed/vendors.js';
 import { seedHr } from './seed/hr.js';
 import { seedDelivery } from './seed/delivery.js';
 import { seedAffiliate } from './seed/affiliate.js';
+import { reconcileCustomerTotals, seedCustomers } from './seed/customers.js';
 
 // The Prisma CLI does not load .env.local; the seed needs the same DATABASE_URL the API
 // uses (the least-privilege role), so it loads the file itself.
@@ -254,6 +255,8 @@ interface SeedTally {
   referrals: number;
   affiliateCommissions: number;
   payouts: number;
+  customers: number;
+  customersReconciled: number;
 }
 
 async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promise<SeedTally> {
@@ -298,6 +301,8 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
     referrals: 0,
     affiliateCommissions: 0,
     payouts: 0,
+    customers: 0,
+    customersReconciled: 0,
   };
 
   for (const account of ACCOUNTS) {
@@ -442,6 +447,12 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
         tally.stockItems += stocked.items;
         tally.stockMovements += stocked.movements;
 
+        // ── Customers ──────────────────────────────────────────────────────────
+        // Before the orders, because an order belongs to a customer that must already exist. These
+        // are master data; everything transactional in this domain hangs off them.
+        const customers = await seedCustomers(tx, tenant.id, tenant.country, user.id);
+        tally.customers += customers.count;
+
         // ── Order types, front of house and a couple of orders ─────────────────
         // Order types come first: an order cannot be created without one, and the two orders
         // below are what make every sales and kitchen screen non-empty on a fresh install.
@@ -482,6 +493,7 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
           orderTypes.idByCode,
           stocked.locationId,
           session.id,
+          customers.primaryId,
         );
 
         // The completed order is settled in cash, and the drawer records the matching movement.
@@ -557,6 +569,13 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
       tally.referrals += referred.referrals;
       tally.affiliateCommissions += referred.commissions;
       tally.payouts += referred.payouts;
+
+      // ── Customers, reconciled ────────────────────────────────────────────────
+      // LAST, on purpose. The denormalised counters on `customer` (total orders, total spent, first
+      // and last order) can only be computed once every order-writing domain has run — sales, till,
+      // delivery. Running it here makes the demo data satisfy the invariant instead of merely
+      // appearing to, and a test can assert it.
+      tally.customersReconciled += await reconcileCustomerTotals(tx, tenant.id);
 
       // Append-only, and the RLS policies allow no UPDATE on this table — so this is a
       // createMany with skipDuplicates rather than an upsert, keyed on a deterministic id.
@@ -639,6 +658,7 @@ async function main(): Promise<void> {
         `  affilie   : ${tally.affiliates} partenaires, ${tally.referralLinks} liens, ` +
         `${tally.referrals} parrainages, ${tally.affiliateCommissions} commissions, ` +
         `${tally.payouts} versements\n` +
+        `  clients   : ${tally.customers} clients, ${tally.customersReconciled} réconciliés\n` +
         'Every account must change its password at first sign-in.\n',
     );
   } finally {

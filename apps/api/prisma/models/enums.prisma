@@ -667,3 +667,72 @@ enum ReferralTarget {
 
   @@map("referral_target")
 }
+
+// ── Customers ────────────────────────────────────────────────────────────────
+
+/// A LEAD is a name and a phone number that has never bought anything — captured at the counter or
+/// on the storefront. Keeping it apart from ACTIVE is what makes "how many of the people we captured
+/// actually converted?" an answerable question instead of a guess.
+enum CustomerStatus {
+  LEAD
+  ACTIVE
+  INACTIVE
+  BLOCKED
+
+  @@map("customer_status")
+}
+
+/// Where the customer came from. REFERRAL closes the loop with the affiliate domain: a referral that
+/// converts produces a customer whose source says so, which is how a partner's numbers get checked.
+enum CustomerSource {
+  POS
+  STOREFRONT
+  REFERRAL
+  IMPORT
+  MANUAL
+  MARKETPLACE
+
+  @@map("customer_source")
+}
+
+enum ConsentChannel {
+  EMAIL
+  SMS
+  PUSH
+  WHATSAPP
+  PHONE
+
+  @@map("consent_channel")
+}
+
+/// What the consent is FOR. Marketing consent does not imply transactional consent, and treating one
+/// as the other is both a compliance failure and an operational one — an order confirmation is not a
+/// marketing message and must not be blocked by a marketing opt-out.
+enum ConsentPurpose {
+  MARKETING
+  TRANSACTIONAL
+  PROFILING
+  THIRD_PARTY
+
+  @@map("consent_purpose")
+}
+
+enum ConsentStatus {
+  GRANTED
+  DENIED
+  WITHDRAWN
+
+  @@map("consent_status")
+}
+
+/// How consent was captured. VERBAL is here because a phone order is a real way to obtain consent and
+/// a real way to lose an argument about whether it was obtained.
+enum ConsentSource {
+  WEB
+  POS
+  IMPORT
+  API
+  VERBAL
+
+  @@map("consent_source")
+}

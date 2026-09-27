@@ -1,0 +1,237 @@
+// Customers — the people who buy, and everything the platform is allowed to know about them.
+//
+// ── Why a customer is not a user ─────────────────────────────────────────────
+// A User signs in to run the business. A Customer buys from it, and most never have an account at
+// all: the ones who walk in and pay cash are still customers, and they are the majority. A nullable
+// `userId` links the two for the storefront accounts that do exist.
+//
+// ── Why customers are ANONYMISED, never deleted ──────────────────────────────
+// A customer can demand erasure. The business cannot comply by deleting the row, because the
+// accounting domain must keep the sale for years and an order without a customer is a hole in the
+// books. `anonymizedAt` records that the PII was removed and the history was kept: the order, the
+// total and the VAT line survive, the name, email and phone do not. It is the only honest way to
+// satisfy both obligations, and a `DELETE` would satisfy one by breaking the other.
+
+/// Someone who buys from one business.
+model Customer {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+
+  /// The storefront account, when there is one. Nullable, and null for most customers.
+  userId String? @map("user_id")
+
+  /// Sequential per tenant, and what staff call them: "CLI-000042". Same reasoning as Order.number —
+  /// a cuid is not something anyone can read out over a counter.
+  number String @db.VarChar(32)
+
+  firstName   String  @map("first_name") @db.VarChar(120)
+  lastName    String? @map("last_name") @db.VarChar(120)
+  /// For B2B customers, who are invoiced under a company name and delivered to as a person.
+  companyName String? @map("company_name") @db.VarChar(200)
+
+  email String? @db.VarChar(320)
+  phone String? @db.VarChar(32)
+
+  /// Not age: the birthday, because a birthday message is the single most effective campaign there
+  /// is and computing it from an age is not possible.
+  birthDate DateTime? @map("birth_date") @db.Date
+
+  locale    String? @db.VarChar(10)
+  avatarUrl String? @map("avatar_url") @db.VarChar(500)
+
+  /// Free-form labels ("VIP", "sans gluten"), used by segmentation. An array rather than a join
+  /// table because segments arrive before the tags have any governance, and a GIN index answers the
+  /// only question asked of them: "who has this tag?".
+  tags String[] @default([])
+
+  status CustomerStatus @default(LEAD)
+  source CustomerSource @default(MANUAL)
+
+  // ── Denormalised from the order history ────────────────────────────────────
+  // Updated in the same transaction as the order, exactly like Order.paidAmount. A customer list is
+  // the most-viewed screen in any dashboard, and aggregating customer_order for every row of it
+  // would be the slowest query in the system.
+  totalOrders   Int     @default(0) @map("total_orders")
+  totalSpent    Decimal @default(0) @map("total_spent") @db.Decimal(14, 2)
+  /// The loyalty balance. The ledger that explains it arrives with the marketing increment; the
+  /// balance lives here because that is where every screen reads it.
+  loyaltyPoints Int     @default(0) @map("loyalty_points")
+
+  firstOrderAt DateTime? @map("first_order_at")
+  lastOrderAt  DateTime? @map("last_order_at")
+
+  /// When the PII was removed, on the customer's request. The row and its history stay.
+  anonymizedAt DateTime? @map("anonymized_at")
+  archivedAt   DateTime? @map("archived_at")
+
+  metadata Json?
+
+  createdById String? @map("created_by_id")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business  Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  user      User?    @relation("CustomerAccount", fields: [userId], references: [id], onDelete: SetNull)
+  createdBy User?    @relation("CustomerAuthor", fields: [createdById], references: [id], onDelete: SetNull)
+
+  addresses CustomerAddress[]
+  notes     CustomerNote[]
+  consents  CustomerConsent[]
+  orders    Order[]
+  /// Referrals that produced this customer — usually one, occasionally more.
+  referrals Referral[]
+
+  @@unique([businessId, number])
+  /// One account per business per user: the same person can be a customer of ten businesses.
+  @@unique([businessId, userId])
+  /// Redundant as a key — `id` is already unique on its own — but REQUIRED so that the child tables
+  /// can reference the PAIR (business_id, id). This is what lets their foreign keys be composite and
+  /// therefore tenant-safe; see the note on CustomerConsent.customer.
+  @@unique([businessId, id])
+  @@index([businessId, status, lastName])
+  @@index([businessId, lastOrderAt])
+  @@index([businessId, phone])
+  @@index([userId])
+  @@map("customer")
+}
+
+/// A saved address.
+///
+/// This is what Order's free-text delivery fields are filled FROM, and why those fields stay: an
+/// order keeps the address the customer gave on the night, and a customer who moves house next month
+/// must not change where last month's order went. The snapshot is the record; this is the convenience.
+model CustomerAddress {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  customerId String @map("customer_id")
+
+  /// "Domicile", "Bureau". Free text: the labels people use are not a closed set.
+  label String? @db.VarChar(60)
+
+  /// Who receives there, when it is not the customer — a gift, a workplace, a parent's house.
+  recipientName  String? @map("recipient_name") @db.VarChar(120)
+  recipientPhone String? @map("recipient_phone") @db.VarChar(32)
+
+  addressLine1 String  @map("address_line1") @db.VarChar(200)
+  addressLine2 String? @map("address_line2") @db.VarChar(200)
+  city         String  @db.VarChar(120)
+  region       String? @db.VarChar(120)
+  postalCode   String? @map("postal_code") @db.VarChar(32)
+  country      String  @db.Char(2)
+
+  /// Geographic coordinates, for delivery pricing and routing. Nullable: most addresses are typed in
+  /// without a map, and a missing pin must not block the order.
+  latitude  Decimal? @db.Decimal(9, 6)
+  longitude Decimal? @db.Decimal(9, 6)
+
+  /// "Portail bleu, 3e étage, sonner deux fois". The field drivers actually need.
+  deliveryInstructions String? @map("delivery_instructions") @db.Text
+
+  /// At most one per customer, enforced by a partial unique index in the migration.
+  isDefault Boolean @default(false) @map("is_default")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// A COMPOSITE foreign key, and the reason is tenant integrity rather than tidiness. With a plain
+  /// FK on `customer_id` alone, tenant B can insert a row of its own naming tenant A's customer: the
+  /// scoping extension rewrites `business_id` to B, the INSERT policy is satisfied, and the FK is
+  /// satisfied too — because the customer does exist. The row is invisible to A, so nothing leaks,
+  /// but the reference is real and any query that trusts `customer_id` without also filtering
+  /// `business_id` would follow it. Making the pair the target makes the mismatch impossible to
+  /// store. Found by a test that tried it and was allowed; see tenant-isolation.integration-spec.ts.
+  customer Customer @relation(fields: [businessId, customerId], references: [businessId, id], onDelete: Cascade)
+
+  @@index([customerId, isDefault])
+  @@map("customer_address")
+}
+
+/// A note staff leave about a customer.
+///
+/// Editable, unlike the consent ledger: a note is a working record ("préfère être appelé le matin")
+/// and pinning it as history would make correcting a typo a new note. Who wrote it and when is kept.
+model CustomerNote {
+  id         String  @id @default(cuid())
+  businessId String  @map("business_id")
+  customerId String  @map("customer_id")
+  authorId   String? @map("author_id")
+
+  body     String  @db.Text
+  /// Pinned notes surface on the customer's card, above the order history.
+  isPinned Boolean @default(false) @map("is_pinned")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// Composite, for the same tenant-integrity reason as CustomerAddress.customer.
+  customer Customer @relation(fields: [businessId, customerId], references: [businessId, id], onDelete: Cascade)
+  author   User?    @relation("CustomerNoteAuthor", fields: [authorId], references: [id], onDelete: SetNull)
+
+  @@index([customerId, isPinned, createdAt])
+  @@map("customer_note")
+}
+
+/// Consent, recorded as a LEDGER of events rather than a flag per channel.
+///
+/// ── Why not a boolean on Customer ────────────────────────────────────────────
+/// "Marketing opt-in: yes" answers the wrong question. The question a regulator, a customer or a
+/// dispute asks is *when* did they agree, *to what wording*, and *how* — and a boolean cannot answer
+/// any of the three. Overwriting it on withdrawal destroys the proof that consent ever existed,
+/// which is the only thing it was for.
+///
+/// So this table is APPEND-ONLY, enforced by RLS: no UPDATE, no DELETE. Withdrawing consent inserts
+/// a WITHDRAWN row. The current state for a channel and purpose is the most recent row, which is why
+/// there is no unique constraint here — a unique key would force exactly the update this design
+/// exists to prevent.
+///
+/// ── Transactional consent is separate on purpose ─────────────────────────────
+/// An order confirmation is not a marketing message. A customer who opts out of marketing still has
+/// to be told their delivery is on its way, and a single flag would either block that or send
+/// marketing to someone who said no.
+model CustomerConsent {
+  id         String @id @default(cuid())
+  businessId String @map("business_id")
+  customerId String @map("customer_id")
+
+  channel ConsentChannel
+  purpose ConsentPurpose
+  status  ConsentStatus
+
+  /// How it was obtained. Stored per event, not per customer: someone can opt in on the web and
+  /// withdraw by phone, and both facts matter.
+  source ConsentSource
+
+  /// The exact wording that was agreed to, and its version. This is the field that turns "they
+  /// consented" into something demonstrable — policies are rewritten, and consent to the old text
+  /// does not transfer to the new one without asking again.
+  policyVersion String? @map("policy_version") @db.VarChar(32)
+  legalText     String? @map("legal_text") @db.Text
+
+  /// Proof of where the consent came from.
+  ipAddress String? @map("ip_address") @db.Inet
+  userAgent String? @map("user_agent") @db.Text
+
+  /// What triggered it, for a consent changed from the dashboard: the campaign, the form, the
+  /// import. Free text rather than a foreign key, because the causes live in four domains.
+  contextRef String? @map("context_ref") @db.VarChar(200)
+
+  /// When the event happened, distinct from when the row was written — an import of a consent form
+  /// signed last month must record last month.
+  recordedAt DateTime @default(now()) @map("recorded_at")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+  /// Composite, for the same tenant-integrity reason as CustomerAddress.customer. It matters most
+  /// here: a consent event recorded against the wrong tenant's customer would be evidence pointing at
+  /// somebody else's data.
+  customer Customer @relation(fields: [businessId, customerId], references: [businessId, id], onDelete: Cascade)
+
+  /// The index the "is this customer opted in?" query uses: latest row per channel and purpose.
+  @@index([customerId, channel, purpose, recordedAt])
+  @@index([businessId, channel, status])
+  @@map("customer_consent")
+}

@@ -484,15 +484,42 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 10/N)** — Thirteen domain groups are done and verified on a real PostgreSQL (local 18.3
+**Avancement (increment 11/N)** — Fourteen domain groups are done and verified on a real PostgreSQL (local 18.3
 and Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the
-till with payments and tax, accounting, vendors, HR with payroll, delivery, and affiliate. 93 models (94 tables),
-22 migrations, 15 tenant-isolation integration tests and 18 schema/seed guards, all green. ONE domain group
-remains: marketing, content, storefront and customers.
+till with payments and tax, accounting, vendors, HR with payroll, delivery, affiliate, and customers. 97 models
+(98 tables), 24 migrations, 16 tenant-isolation integration tests and 18 schema/seed guards, all green. Three
+domain groups remain: storefront, content, and marketing with integrations.
 
-That last group is the one that closes the remaining loose ends: `Order` currently substitutes a free-text name
-where a `customerId` belongs, and `Referral.customerRef` is free text for the same reason. Both wait on the
-customers table, and both are honest about it in the schema rather than pretending a placeholder is a constraint.
+The customers increment closed both loose ends that had been flagged for two increments:
+
+  - `Order.customerId` is now a real foreign key. The free-text delivery fields on the order stay, and that is
+    deliberate: they are the address the customer gave on the night, and a customer who moves house next month
+    must not change where last month's order went.
+  - `Referral.customerRef` (a free-text placeholder) is gone, replaced by a real `customerId`. The placeholder was
+    honest about being one; the moment a constraint was possible it became one.
+
+Two things were found by tests rather than by review, and both are now enforced in the database:
+
+  1. **A tenant could file a row against another tenant's customer.** `customer_address`, `customer_note` and
+     `customer_consent` pointed at `customer(id)` alone. Because the scoping layer rewrites `business_id` to the
+     caller's context, tenant B could insert a consent event naming tenant A's customer and both the INSERT policy
+     and the foreign key were satisfied. Nothing leaked — A never sees the row — but the reference was real, and
+     any query joining on `customer_id` without also matching `business_id` would have followed it. The
+     isolation suite attempted exactly that and was allowed to. Fixed by making the key composite:
+     `(business_id, customer_id) → customer(business_id, id)`, which requires a redundant-looking
+     `UNIQUE (business_id, id)` as its target. **The constraint, when applied, refused to be created until three
+     real cross-tenant rows left behind by that test were removed** — the database found the bad data itself.
+  2. **A seed that skips is a seed that does not converge.** Re-running after this increment left the demo orders
+     with a null `customerId`, because the orders already existed and the seeder skipped them entirely. The
+     reconciliation then computed zero orders for their customer and looked perfectly correct while being wrong.
+     The same bug existed in the affiliate seed's new `customerId`. Both now fill a null and leave a deliberate
+     non-null alone.
+
+A related decision worth recording: **customers are anonymised, never deleted.** A customer can demand erasure,
+but the accounting domain has to keep the sale for years and an order without a customer is a hole in the books.
+`anonymizedAt` records that the PII was stripped and the history kept, and a CHECK refuses an anonymisation that
+leaves an email, phone, surname, company name or account behind. A `DELETE` would satisfy one obligation by
+breaking the other.
 
 Still open from earlier increments, and not to be forgotten once the domains are finished:
 

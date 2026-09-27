@@ -124,7 +124,7 @@ async function finishAffiliate(
 
   const order = await tx.order.findFirst({
     where: { businessId, number: 'DEMO-0001' },
-    select: { id: true, number: true, subtotal: true, placedAt: true },
+    select: { id: true, number: true, subtotal: true, placedAt: true, customerId: true },
   });
 
   if (order === null) {
@@ -134,8 +134,23 @@ async function finishAffiliate(
   // One attribution per order — the unique key on order_id is what guarantees it.
   const existingReferral = await tx.referral.findFirst({
     where: { businessId, orderId: order.id },
-    select: { id: true },
+    select: { id: true, customerId: true },
   });
+
+  // CONVERGE, do not merely skip — the same rule as the demo orders. This referral was seeded in an
+  // earlier increment, when `customerRef` was still free text and there was no customer to point at.
+  // Leaving it alone would keep a null where a real foreign key now belongs, and the affiliate
+  // report would show a referral that produced nobody. Only a null is filled.
+  if (
+    existingReferral !== null &&
+    existingReferral.customerId === null &&
+    order.customerId !== null
+  ) {
+    await tx.referral.update({
+      where: { id: existingReferral.id },
+      data: { customerId: order.customerId },
+    });
+  }
 
   const referral =
     existingReferral ??
@@ -146,7 +161,10 @@ async function finishAffiliate(
         referralLinkId: linkId,
         kind: 'ORDER',
         orderId: order.id,
-        customerRef: `Client ${order.number}`,
+        /// The customer the referral produced. This replaced a free-text `customerRef`: the
+        /// placeholder was honest about being one, and the moment a real foreign key was possible it
+        /// became one.
+        customerId: order.customerId,
         status: 'CONFIRMED',
         occurredAt: order.placedAt,
         // The base excludes tax and delivery — a partner earns on what was sold, not on what the

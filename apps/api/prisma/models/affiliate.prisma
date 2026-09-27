@@ -122,10 +122,10 @@ model Referral {
   /// affiliate or none, which is the rule that stops a sale being paid for twice.
   orderId String? @unique @map("order_id")
 
-  /// The customer, once the customers domain exists to point at. Free text for now, deliberately: a
-  /// foreign key to a table that does not exist yet would be a placeholder pretending to be a
-  /// constraint.
-  customerRef String? @map("customer_ref") @db.VarChar(200)
+  /// Who the referral produced, now that the customers domain exists to point at. A real foreign key
+  /// rather than the free-text `customerRef` placeholder this replaced: the placeholder was honest
+  /// about being a placeholder, and the moment it could be a constraint it became one.
+  customerId String? @map("customer_id")
 
   status ReferralStatus @default(PENDING)
 
@@ -153,12 +153,16 @@ model Referral {
   business     Business      @relation(fields: [businessId], references: [id], onDelete: Cascade)
   affiliate    Affiliate     @relation(fields: [affiliateId], references: [id], onDelete: Cascade)
   referralLink ReferralLink? @relation(fields: [referralLinkId], references: [id], onDelete: SetNull)
+  /// Set when the referral converted into a real customer. Nullable: a referral can be a click that
+  /// produced a sale by an existing customer, in which case there is no new customer to point at.
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
 
   commissions Commission[]
 
   @@index([businessId, occurredAt])
   @@index([affiliateId, status, occurredAt])
   @@index([referralLinkId])
+  @@index([customerId])
   @@map("referral")
 }
 
