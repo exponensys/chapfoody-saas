@@ -45,6 +45,37 @@ curl -s localhost:4000/health     # { "status":"ok", … }
 | `dev` | Shared local development |
 | one per PR | Created and deleted automatically by CI (M1) |
 
+### 1.0 Verified state of the Neon database (`chapfoody_saas`)
+
+The three M2 migration batches are deployed here, and isolation is confirmed enforced:
+
+```bash
+ADMIN_DATABASE_URL="$DIRECT_URL" APP_DATABASE_URL="$DATABASE_URL" \
+  node apps/api/prisma/sql/verify-rls.mjs
+# ✅ the application connects as "chapfoody_app" with bypassrls=false
+# ✅ every tenant table has RLS enabled and forced (0 unprotected)
+#    23 tables, 11 tenant references, 20 policies
+# ✅ with no tenant context the application sees zero businesses
+```
+
+Two properties of Neon that this run exposed, both of which would otherwise be silent:
+
+- **`neondb_owner` carries `bypassrls`.** Neon grants it so the owner can administer the
+  database, but `BYPASSRLS` overrides both plain *and* forced row-level security. An
+  application connected as the owner runs with every tenant policy disabled — and the
+  isolation suite would pass without proving anything. `chapfoody_app`
+  (`NOSUPERUSER NOBYPASSRLS`) is therefore required, not optional:
+
+  ```bash
+  ADMIN_DATABASE_URL="$DIRECT_URL" APP_ROLE_PASSWORD="…" \
+    node apps/api/prisma/sql/provision-app-role.mjs
+  ```
+
+- **`channel_binding=require` and `sslmode=require`** are accepted by the `pg` driver. The
+  driver warns that today's `sslmode=require` behaves as `verify-full` and that this will
+  change in `pg` v9; writing `sslmode=verify-full` explicitly silences it and keeps the
+  stronger behaviour.
+
 ---
 
 ## 1.1 Local PostgreSQL and the application role (M2)

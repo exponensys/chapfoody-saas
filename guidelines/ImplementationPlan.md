@@ -530,8 +530,13 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 **Livrables** — migrations applied to the Neon dev branch, seeded data, ERD, RLS proof tests.
 
 **Definition of Done** — `pnpm db:reset && pnpm db:seed` reproduces a fully working dataset from scratch on a clean
-branch, and the RLS proof tests pass. `[~]` Reproduced on a local PostgreSQL 18; the Neon dev branch is still to be
-created (runbook step 1). Note that `db:reset`/`db:seed` script aliases are not yet defined in `apps/api/package.json`.
+branch, and the RLS proof tests pass. `[~]` The Neon database `chapfoody_saas` now has all three migrations deployed
+and isolation verified in place (`prisma/sql/verify-rls.mjs`: 23 tables, 11 tenant references, 20 policies, RLS
+enabled and forced, application role `NOBYPASSRLS`, fail-closed with no tenant context). Two gaps remain: the
+database rebuild has not been executed as such — Prisma refuses `migrate reset` as a destructive action and requires
+explicit human consent, which is the right default for a database that also holds production credentials, so it is
+unverified on the local instance too — and the `db:reset` / `db:seed` aliases are not yet defined in
+`apps/api/package.json`, so that exact command cannot run as written.
 
 **Tests (TDD)** — integration only: (a) with business A's context, no query can read business B's rows; `[x]`
 (b) unique constraints behave per tenant; `[x]` (c) the seed is idempotent when run twice; `[x]` (d) all eight accounts
