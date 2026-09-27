@@ -484,11 +484,59 @@ document was exported to `packages/api-client/openapi.json`.
 
 **Objectif** — The complete schema of section 5.2, tenant-safe, with the required accounts and demo data seeded.
 
-**Avancement (increment 11/N)** — Fourteen domain groups are done and verified on a real PostgreSQL (local 18.3
-and Neon 18.6): identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the
-till with payments and tax, accounting, vendors, HR with payroll, delivery, affiliate, and customers. 97 models
-(98 tables), 24 migrations, 16 tenant-isolation integration tests and 18 schema/seed guards, all green. Three
-domain groups remain: storefront, content, and marketing with integrations.
+**Avancement (M2 COMPLET)** — Fifteen domain groups are done and verified on a real PostgreSQL (local 18.3 and
+Neon 18.6), both in sync at 33 migrations: identity/tenancy, subscription/premium, catalogue, stock, purchasing,
+front of house, sales, the till with payments and tax, accounting, vendors, HR with payroll, delivery, affiliate,
+customers, storefront, content, and marketing with integrations. 134 models (135 tables), 86 enums, 33
+migrations, 16 tenant-isolation integration tests and 18 schema/seed guards, all green. RLS reports 135 tables /
+109 tenant references / 154 policies / 0 unprotected.
+
+**THE THREE INCREMENTS THAT CLOSED IT OUT**
+
+  12. **Storefront** — the tenant's own website: config, themes, pages, navigation, domains, assets, checkout
+      rules. `Theme` is platform data (a catalogue of designs); `WebsiteTheme` is the tenant's resolved copy and
+      keeps BOTH the preset chosen and the resulting tokens, because storing only the tokens loses which preset
+      to re-apply when it improves, and storing only the preset loses the overrides.
+  13. **Content** — the platform's own blog and vidéothèque. These tables have NO `business_id`, alone among the
+      domains, so `cf_apply_tenant_rls()` has nothing to do and every policy is hand-written. They answer a
+      different question: not "whose data is this?" but "is this public yet, and may this caller write it?".
+      `blog_comment` is the one table the public may write, and the INSERT policy admits **only** a PENDING row —
+      so an approved comment cannot be created by passing a status through from a request body.
+  14. **Marketing and integrations** — campaigns, audiences, segments, loyalty, rewards, automations, plus
+      integrations, webhook delivery and job history. A campaign targets an audience that is **stored**, not a
+      query re-run at send time: "these 412 people received this message" is auditable, "these people matched a
+      filter once" is not. Loyalty follows the ledger discipline (`loyalty_transaction` is append-only, points are
+      signed, `balanceAfter` is recorded per row).
+
+**FOUR THINGS FOUND BY BUILDING IT, ALL NOW FIXED OR GUARDED**
+
+  1. **A tenant could file a row against another tenant's customer** (customers increment). With a plain foreign
+     key on `customer_id`, tenant B could insert a consent event naming tenant A's customer and BOTH the INSERT
+     policy and the FK were satisfied. Fixed with a composite key, `(business_id, customer_id) → customer(business_id, id)`.
+     When the constraint was applied it refused to be created until three real cross-tenant rows left behind by
+     the test that found it were deleted — the database found the bad data itself.
+  2. **A seed that skips does not converge.** Re-running left the demo orders and referrals with a null
+     `customerId`, because those rows already existed and the seeder skipped them; the reconciliation then
+     computed zero orders and looked correct while being wrong. Both now fill a null and leave a deliberate
+     non-null alone.
+  3. **`Integration.lastError` was declared without `@map("last_error")`**, so Prisma made a camelCase column and
+     the constraint referencing `last_error` was refused. Same class of bug this project has hit before: every
+     column is mapped explicitly, and the database naming a column it cannot find is a far better failure than a
+     query silently returning nulls.
+  4. **That failure left the schema half applied**, because Prisma does not roll DDL back. Rather than pretending
+     it never happened, the original migration is marked applied and a recovery migration finishes the job. The
+     same defect then broke the SECOND database, which is the real lesson: **a migration has to be replayable
+     from empty.** The duplicated constraints were removed from the original file and now live only in the
+     recovery migration, and a fresh database proves it.
+
+**KNOWN GAPS, TO CLOSE BEFORE THE RELEVANT MODULE IS BUILT**
+
+  - The content publication policies are verified by a probe against the real database, NOT by the committed
+    integration suite — the isolation spec has no super-admin fixture. Worth adding before the content module.
+  - Integration credentials must be encrypted at the application layer. The column exists and is documented; the
+    crypto does not exist yet.
+  - `db:reset` / `db:seed` aliases, the ERD, Neon `dev`/`staging` branches, and pushing to `origin` remain
+    outstanding housekeeping.
 
 The customers increment closed both loose ends that had been flagged for two increments:
 

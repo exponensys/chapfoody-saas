@@ -660,49 +660,15 @@ ALTER TABLE "reward_rule" ADD CONSTRAINT "reward_rule_value_not_negative"
     AND ("minimum_order_amount" IS NULL OR "minimum_order_amount" >= 0)
   );
 
--- ── Integrations ─────────────────────────────────────────────────────────────
--- A connection that is CONNECTED has been connected, and one in ERROR has something to show for it.
--- "ERROR" with no message is a support ticket with no information in it.
-ALTER TABLE "integration" ADD CONSTRAINT "integration_status_implies_details"
-  CHECK (
-    ("status" <> 'CONNECTED' OR "connected_at" IS NOT NULL)
-    AND ("status" <> 'ERROR' OR "last_error" IS NOT NULL)
-  );
-
--- ── Webhooks ─────────────────────────────────────────────────────────────────
--- HTTPS only. A webhook carries order and customer data, and an http:// endpoint sends it in clear
--- text across whatever network is in between.
-ALTER TABLE "webhook_endpoint" ADD CONSTRAINT "webhook_endpoint_is_https"
-  CHECK ("url" LIKE 'https://%');
-
-ALTER TABLE "webhook_endpoint" ADD CONSTRAINT "webhook_endpoint_failures_sane"
-  CHECK ("failure_count" >= 0);
-
--- Disabling is a consequence, so it has to say what happened.
-ALTER TABLE "webhook_endpoint" ADD CONSTRAINT "webhook_endpoint_disabled_has_a_reason"
-  CHECK ("disabled_at" IS NULL OR "disabled_reason" IS NOT NULL);
-
-ALTER TABLE "webhook_delivery" ADD CONSTRAINT "webhook_delivery_attempts_sane"
-  CHECK ("attempts" >= 0 AND ("duration_ms" IS NULL OR "duration_ms" >= 0));
-
--- A successful delivery has a time, and a failed one has something to explain it. Two distinct columns
--- because they are distinct failures: a non-2xx response means they refused it, and an `error` with no
--- response means we never reached them at all.
-ALTER TABLE "webhook_delivery" ADD CONSTRAINT "webhook_delivery_status_implies_details"
-  CHECK (
-    ("status" <> 'SUCCESS' OR "delivered_at" IS NOT NULL)
-    AND ("status" <> 'FAILED' OR "error" IS NOT NULL OR "response_status" IS NOT NULL)
-  );
-
--- ── Jobs ─────────────────────────────────────────────────────────────────────
-ALTER TABLE "job_run" ADD CONSTRAINT "job_run_attempts_sane"
-  CHECK ("attempts" >= 1 AND ("duration_ms" IS NULL OR "duration_ms" >= 0));
-
--- Anything that has stopped has stopped, and a failure says why. What makes the history useful rather
--- than a list of names and timestamps.
-ALTER TABLE "job_run" ADD CONSTRAINT "job_run_status_implies_details"
-  CHECK (
-    ("status" NOT IN ('SUCCEEDED', 'FAILED', 'CANCELED') OR "finished_at" IS NOT NULL)
-    AND ("status" <> 'FAILED' OR "error" IS NOT NULL)
-  );
+-- ═════════════════════════════════════════════════════════════════════════════
+-- NOTE: the integrations, webhook and job constraints are NOT here.
+--
+-- They reference `integration.last_error`, which did not exist when this migration first ran: the
+-- column was created as `lastError` because the field lacked an explicit @map, so this file failed
+-- partway and took the schema with it. The column is renamed — and those constraints added — by
+-- 20260928010050_m2_fix_integration_error_column, which is the only place they now live.
+--
+-- Keeping them here as well would make this migration fail on every FRESH database, which is exactly
+-- what happened on the second one it was deployed to. A migration has to be replayable from empty.
+-- ═════════════════════════════════════════════════════════════════════════════
 

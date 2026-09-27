@@ -706,6 +706,13 @@ async function seedAccounts(prisma: PrismaClient, registry: SeedRegistry): Promi
  * would be refused with any other `userId`. And it must NOT be set as a tenant: the content belongs to
  * the platform, and a business context would be a lie the database happens to tolerate.
  *
+ * ── The timeout is not optional in practice ──────────────────────────────────
+ * This call originally used Prisma's 5-second default, and it failed on the first COLD database it met:
+ * "a query cannot be executed on an expired transaction ... 5 341 ms passed". A warm database hides it
+ * entirely, because almost everything is already there and the transaction does almost nothing. It now
+ * takes the same raised limit as the tenant transactions, and for the same reason: a seed is a batch
+ * job, not a request, and it runs against databases whose latency we do not choose.
+ *
  * Returns zeroes rather than throwing when there is no admin account, so a database seeded before
  * accounts existed still completes: content with no author is a smaller problem than a seed that stops.
  */
@@ -730,7 +737,9 @@ async function seedPlatformContent(prisma: PrismaClient): Promise<ContentCounter
     };
   }
 
-  return runAsTenant(prisma, { userId: admin.id }, (tx) => seedContent(tx, admin.id));
+  return runAsTenant(prisma, { userId: admin.id }, (tx) => seedContent(tx, admin.id), {
+    timeoutMs: SEED_TENANT_TRANSACTION_TIMEOUT_MS,
+  });
 }
 
 async function main(): Promise<void> {
