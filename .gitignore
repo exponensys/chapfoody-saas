@@ -35,6 +35,11 @@ pnpm-debug.log*
 *.swp
 
 # ─── Generated files (recreated by tooling, never committed) ─────────────────
+# Prisma 7 generates the client as TypeScript into the project. It is rebuilt by
+# every `prisma generate`, which runs in pre-build/pre-test hooks, so committing it
+# would only add thousands of machine-authored lines to every review.
+apps/api/src/generated/
+
 # Next.js rewrites next-env.d.ts on every `next dev` and `next build`, and the
 # content flaps between `./.next/dev/types/...` (dev) and `./.next/types/...`
 # (build). Both variants reference the git-ignored `.next/` directory, so

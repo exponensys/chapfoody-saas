@@ -28,6 +28,9 @@ export default tseslint.config(
       '**/.next/**',
       '**/.turbo/**',
       '**/*.d.ts',
+      // Generated code (Prisma client, OpenAPI types…) is machine-authored: linting
+      // it produces thousands of findings nobody may fix.
+      '**/generated/**',
       // The frozen prototype must never be linted: it is read-only and would
       // produce thousands of findings that nobody is allowed to fix.
       'legacy/**',
@@ -65,6 +68,15 @@ export default tseslint.config(
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
       '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+
+  // CLI entrypoints and seeds report their progress on stdout by design; that is
+  // their user interface, not debug noise.
+  {
+    files: ['**/scripts/**/*.ts', '**/prisma/seed.ts'],
+    rules: {
+      'no-console': 'off',
     },
   },
 

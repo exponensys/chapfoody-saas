@@ -11,4 +11,6 @@ dist/
 .next/
 .turbo/
 coverage/
+# Generated Prisma client (recreated by `prisma generate`)
+apps/api/src/generated/
 *.md
