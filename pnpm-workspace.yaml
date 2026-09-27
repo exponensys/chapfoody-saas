@@ -18,6 +18,7 @@ packages:
 #   esbuild              → binary used by tsx (API dev server) and Vitest
 #   @tailwindcss/oxide   → Tailwind v4 native engine
 #   sharp                → native image processing used by next/image
+#   prisma / @prisma/*   → download the query engine binaries
 #
 # `allowBuilds` is the pnpm 12 spelling; it replaced the earlier
 # `onlyBuiltDependencies` list. `pnpm config list` reports every package still
@@ -28,6 +29,22 @@ packages:
 # unexpected package requesting an install script is exactly the supply-chain
 # signal this default is designed to raise.
 allowBuilds:
+  # Native engines that build or download a binary at install time.
+  '@prisma/client': true
+  '@prisma/engines': true
   '@tailwindcss/oxide': true
   esbuild: true
   sharp: true
+  prisma: true
+
+  # Native helpers pulled in by the API toolchain.
+  '@parcel/watcher': true # native file watching
+  'unrs-resolver': true # native module resolver used by ESLint
+
+  # Denied on purpose. Each of these works without its build script, so allowing it
+  # would mean running install-time code we have no use for:
+  '@scarf/scarf': false # install-time analytics, not a build requirement
+  ssh2: false # only needed for remote Docker; the pure-JS path is used
+  'cpu-features': false # optional accelerator for ssh2, unused here
+  'msgpackr-extract': false # optional accelerator for BullMQ; JS fallback is used
+  protobufjs: false # its postinstall is a no-op for our usage
