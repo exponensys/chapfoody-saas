@@ -1,0 +1,14 @@
+{
+  "extends": "@chapfoody/config/tsconfig/library.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "dist",
+    // DOM is declared because this package types the Fetch API (fetch, Response,
+    // RequestInit, AbortSignal, URLSearchParams). Node 18+ implements all of them at
+    // runtime, so the same declarations hold on both runtimes — and it avoids leaking
+    // Node-only globals (process, Buffer) into a package the browser consumes.
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "src/**/*.test.ts", "src/**/*.test-util.ts"]
+}
