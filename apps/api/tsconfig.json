@@ -1,9 +1,42 @@
 {
   "extends": "@chapfoody/config/tsconfig/node.json",
   "compilerOptions": {
-    "rootDir": "src",
-    "outDir": "dist"
+    // rootDir and outDir are deliberately absent: they describe the emit layout, which
+    // is a build concern, and declaring rootDir: src here would make every file under
+    // test/ an error (TS6059) because this config typechecks the specs too.
+    // They live in tsconfig.build.json.
+
+    // The specs use Jest's globals (describe/it/expect), so its types must be in the
+    // program; the shared node base only declares `node`.
+    "types": ["node", "jest"],
+
+    // ── Why the API is CommonJS and built with tsc ────────────────────────────
+    // NestJS dependency injection reads the `design:paramtypes` metadata that
+    // TypeScript emits for decorated constructor parameters. That emit is a
+    // TypeScript-only feature: bundler-based transforms (esbuild, used by tsx;
+    // Oxc, used by Vite/Vitest) do NOT produce it, so a Nest app cannot be run or
+    // tested through those tools. Hence: tsc for compilation, CommonJS as the
+    // module format (Nest's fully supported path), and Jest for tests.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "module": "CommonJS",
+    "moduleResolution": "Node",
+
+    // Nest DTOs are instantiated by class-transformer and validated by
+    // class-validator, not by their own constructor, so this check would flag
+    // every DTO property. Validation happens at the pipe, not at construction.
+    "strictPropertyInitialization": false,
+
+    // ES2022 targets default this to true, which defines class fields with
+    // Object.defineProperty and interferes with the decorator metadata NestJS and
+    // class-validator rely on. Nest's own starter config keeps it off.
+    "useDefineForClassFields": false
   },
-  "include": ["src/**/*.ts"],
-  "exclude": ["dist", "node_modules", "src/**/*.test.ts"]
+  // `test/**` is included so the e2e specs are typechecked too; the build
+  // config (tsconfig.build.json) narrows this to `src` only.
+  // `**/*.d.ts` is listed explicitly: ambient declarations such as the Express
+  // request augmentation in src/types/express.d.ts must be in the program for the
+  // augmented properties to resolve.
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
 }

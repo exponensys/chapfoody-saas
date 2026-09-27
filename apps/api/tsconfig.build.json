@@ -1,0 +1,20 @@
+{
+  // Production build: sources only. Specs and e2e helpers are typechecked by the
+  // main tsconfig but must never be emitted into dist/.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The emit layout belongs here, not in the typechecking config: `test/` is part
+    // of that program, and a rootDir of `src` would reject every file under it.
+    "rootDir": "src",
+    "outDir": "dist",
+
+    // Keep the incremental build state INSIDE the output directory. The build script
+    // wipes `dist/` first (so a removed source can never leave a stale artefact —
+    // exactly what happened to the M0 placeholder files), and tsc must lose its
+    // "everything is up to date" state at the same moment. Storing it elsewhere made
+    // tsc believe the deleted output still existed and emit nothing at all.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules", "src/**/*.spec.ts", "test"]
+}
