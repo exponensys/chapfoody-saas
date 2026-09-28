@@ -488,8 +488,9 @@ document was exported to `packages/api-client/openapi.json`.
 Neon 18.6), both in sync at 33 migrations: identity/tenancy, subscription/premium, catalogue, stock, purchasing,
 front of house, sales, the till with payments and tax, accounting, vendors, HR with payroll, delivery, affiliate,
 customers, storefront, content, and marketing with integrations. 134 models (135 tables), 86 enums, 33
-migrations, 16 tenant-isolation integration tests and 18 schema/seed guards, all green. RLS reports 135 tables /
-109 tenant references / 154 policies / 0 unprotected.
+migrations, 23 integration tests and 18 schema/seed guards, all green. RLS reports 135 tables / 109 tenant
+references / 154 policies / 0 unprotected. The rebuild, the seed and the diagrams are reproducible from an empty
+database, and the ERD is committed and checked in CI.
 
 **THE THREE INCREMENTS THAT CLOSED IT OUT**
 
@@ -531,13 +532,29 @@ migrations, 16 tenant-isolation integration tests and 18 schema/seed guards, all
 
 **KNOWN GAPS, TO CLOSE BEFORE THE RELEVANT MODULE IS BUILT**
 
-  - The content publication policies are verified by a probe against the real database, NOT by the committed
-    integration suite — the isolation spec has no super-admin fixture. Worth adding before the content module.
+  - ~~The content publication policies are verified by a probe against the real database, NOT by the committed
+    integration suite~~ — `[x]` closed by `test/content-policies.integration-spec.ts`, which creates its own
+    SUPER_ADMIN and ordinary-user fixtures (the isolation spec had none) and asserts the policies from all three
+    contexts that matter: anonymous, a signed-in non-admin, and platform staff. **Building it surfaced a real
+    constraint that a probe had missed**, recorded below.
   - Integration credentials must be encrypted at the application layer. The column exists and is documented; the
     crypto does not exist yet.
   - `db:reset` / `db:seed` are defined and the rebuild has been executed; the ERD is generated, committed and
-    checked in CI. What remains is **Neon `dev`/`staging` branches** and **pushing to `origin`** — 18 local commits,
-    nothing published.
+    checked in CI. What remains is **Neon `dev`/`staging` branches** and **pushing to `origin`** — nothing is
+    published yet.
+
+**A CONSTRAINT FOUND WHILE WRITING THOSE TESTS, AND IT AFFECTS HOW THE COMMENT ENDPOINT MUST BE WRITTEN**
+
+The public comment path **cannot use Prisma's `create`**. `create` issues `INSERT … RETURNING`, and PostgreSQL
+subjects the RETURNING clause to the SELECT policy — and a PENDING comment is deliberately invisible to the public,
+so the row it has just written is not visible to the writer either. The insert is refused outright. Verified by
+experiment, not by reading the manual: the identical statement succeeds without RETURNING and fails with it.
+
+This is the policy being coherent rather than a quirk to work around. An anonymous writer is not allowed to read
+back what they wrote, so the public path must insert **without** asking for the row and the application must
+generate the id itself — which is free, because Prisma's `@default(cuid())` runs client-side. Both halves are now
+asserted in the suite, including the RETURNING refusal, so that a future policy change cannot silently reopen the
+path while quietly breaking the moderation guarantee it was protecting.
 
 The customers increment closed both loose ends that had been flagged for two increments:
 
@@ -683,7 +700,8 @@ exactly the defect that broke the second database this schema was deployed to. T
 `chapfoody_app` (`NOSUPERUSER NOBYPASSRLS`) and `db:seed` populated every domain in a single cold pass: 7 businesses,
 14 customers, 7 storefronts with 21 pages, 3 categories and 4 articles of content, 7 loyalty programmes with 21
 ledger movements, 7 campaigns and 7 integrations. The rebuilt database then reported 135 tables / 109 tenant
-references / 154 policies / 0 unprotected, and all 16 isolation tests passed.
+references / 154 policies / 0 unprotected, and all 23 integration tests passed (16 tenant isolation, 7 content
+policies).
 
 Three things are worth recording about getting there. **The aliases did not exist**, which is why the command could
 not run as written before. **`db:reset` is a script, not `prisma migrate reset --force`**: the plan's own reasoning
