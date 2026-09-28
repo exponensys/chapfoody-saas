@@ -95,10 +95,20 @@ export class JwtAuthGuard implements CanActivate {
     }
 
     try {
-      return await this.jwt.verifyAsync<AccessTokenPayload>(token);
+      const payload = await this.jwt.verifyAsync<AccessTokenPayload>(token);
+
+      // The session claim is REQUIRED, not merely used. An MFA challenge token is signed with the same
+      // key and carries no `sid`, so without this check a challenge — a credential worth as much as a
+      // password and valid for five minutes — would reach the session lookup as `undefined` and either
+      // error or, worse, match something. Requiring the claim is what keeps the two token types apart.
+      if (typeof payload.sid !== 'string' || typeof payload.sub !== 'string') {
+        throw new Error('missing session claim');
+      }
+
+      return payload;
     } catch {
-      // Expired, badly signed, or not a JWT at all. The library's own errors are detailed enough to be
-      // useful to an attacker and are deliberately discarded.
+      // Expired, badly signed, not a JWT at all, or the wrong KIND of token. The library's own errors are
+      // detailed enough to be useful to an attacker and are deliberately discarded.
       throw AppException.unauthenticated('Authentification requise.');
     }
   }

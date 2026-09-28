@@ -11,6 +11,9 @@ import { DEFAULT_CORS_ORIGINS, DEFAULT_PORT, loadEnv } from './env.js';
 const PRODUCTION_SECRETS = {
   JWT_ACCESS_SECRET: 'a'.repeat(40),
   JWT_REFRESH_SECRET: 'b'.repeat(40),
+  // The MFA secret box key is required in production too: a development placeholder reaching a
+  // deployment would encrypt every enrolled TOTP secret under a key published in this repository.
+  MFA_ENCRYPTION_KEY: 'c'.repeat(40),
 } as const;
 
 describe('loadEnv defaults', () => {

@@ -29,7 +29,7 @@ export function makeTestEnv(overrides: Partial<ApiEnv> = {}): ApiEnv {
       refreshTtlSeconds: 2_592_000,
       cookie: { name: 'cf_refresh', secure: false, sameSite: 'lax', domain: undefined },
       lockout: { maxFailedAttempts: 10, durationSeconds: 900 },
-      mfa: { issuer: 'Chapfoody', encryptionKey: undefined },
+      mfa: { issuer: 'Chapfoody', encryptionKey: 'dev-only-mfa-encryption-key-for-tests' },
       google: { clientId: undefined, clientSecret: undefined, redirectUri: undefined },
     },
     ...overrides,

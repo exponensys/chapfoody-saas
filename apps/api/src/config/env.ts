@@ -71,8 +71,11 @@ export interface AuthEnv {
 
   mfa: {
     issuer: string;
-    /** Encrypts the TOTP secret at rest. Required in production, where enrolment is attempted. */
-    encryptionKey: string | undefined;
+    /**
+     * Encrypts the TOTP secret at rest. Always present: resolved to a development placeholder outside
+     * production, where `loadEnv` refuses to start without a real one.
+     */
+    encryptionKey: string;
   };
 
   google: {
@@ -92,6 +95,15 @@ export interface AuthEnv {
  */
 export const DEV_ACCESS_SECRET = 'dev-only-access-secret-not-for-production-32+';
 export const DEV_REFRESH_SECRET = 'dev-only-refresh-secret-not-for-production-32+';
+
+/**
+ * Development-only key for the secret box that protects TOTP secrets.
+ *
+ * Same reasoning as the signing keys, and the same protection: `loadEnv` refuses to start in production
+ * without an explicit value, so this cannot be inherited by a deployment. If it were, every enrolled
+ * TOTP secret would be encrypted under a key that is published in this repository.
+ */
+export const DEV_MFA_ENCRYPTION_KEY = 'dev-only-mfa-encryption-key-not-for-production';
 
 /** Minimum length for a signing key in production. Below this, HMAC-SHA256 is the weak link. */
 export const MIN_SECRET_LENGTH = 32;
@@ -173,6 +185,7 @@ function parseAuth(source: EnvSource, nodeEnv: NodeEnv): AuthEnv {
     for (const [value, variable] of [
       [providedAccess, 'JWT_ACCESS_SECRET'],
       [providedRefresh, 'JWT_REFRESH_SECRET'],
+      [optionalUrl(source.MFA_ENCRYPTION_KEY), 'MFA_ENCRYPTION_KEY'],
     ] as const) {
       if (value === undefined) {
         throw new Error(`${variable} is required in production. Generate one with: openssl rand -base64 48`);
@@ -253,7 +266,7 @@ function parseAuth(source: EnvSource, nodeEnv: NodeEnv): AuthEnv {
     },
     mfa: {
       issuer: optionalUrl(source.MFA_ISSUER) ?? DEFAULT_MFA_ISSUER,
-      encryptionKey: optionalUrl(source.MFA_ENCRYPTION_KEY),
+      encryptionKey: optionalUrl(source.MFA_ENCRYPTION_KEY) ?? DEV_MFA_ENCRYPTION_KEY,
     },
     google: {
       clientId: optionalUrl(source.GOOGLE_CLIENT_ID),

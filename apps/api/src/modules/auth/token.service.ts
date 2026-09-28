@@ -8,6 +8,18 @@ import type { ApiEnv } from '../../config/env.js';
 import { API_ENV } from '../../config/env.token.js';
 import { PrismaService } from '../../infra/prisma/prisma.service.js';
 
+/**
+ * How long a password-verified caller has to supply their second factor.
+ *
+ * Short on purpose: the challenge token is a bearer credential that proves the password step passed, so
+ * it is worth as much as a password. Five minutes is enough to find a phone and open an authenticator,
+ * and short enough that a leaked one is usually stale by the time it is found.
+ */
+export const MFA_CHALLENGE_TTL_SECONDS = 300;
+
+/** Marks a token as an MFA challenge, so it can never be mistaken for an access token. */
+const MFA_CHALLENGE_TYPE = 'mfa_challenge';
+
 export interface SessionOwner {
   userId: string;
   businessId?: string | undefined;
@@ -96,6 +108,43 @@ export class TokenService {
       sid: context.sessionId,
       ...(context.businessId === undefined ? {} : { bid: context.businessId }),
     });
+  }
+
+  /**
+   * A short-lived token proving the PASSWORD step passed, for a caller who owes a second factor.
+   *
+   * ── Why a token rather than a server-side row ────────────────────────────────
+   * It carries no session and grants nothing on its own: it says "this person knows the password" for
+   * five minutes, and the only thing it unlocks is the MFA verification endpoint. A database row would
+   * mean a write on every login attempt that then has to be cleaned up, for a piece of state that
+   * expires on its own.
+   *
+   * ── Why it is typed ─────────────────────────────────────────────────────────
+   * Signed with the same key as access tokens, because there is one signing key. The `typ` claim is what
+   * keeps the two apart, and `JwtAuthGuard` refuses any token without the session claim it needs — so a
+   * challenge cannot be presented as an access token even if this marker were somehow lost.
+   */
+  signMfaChallenge(userId: string): Promise<string> {
+    return this.jwt.signAsync(
+      { sub: userId, typ: MFA_CHALLENGE_TYPE },
+      { expiresIn: MFA_CHALLENGE_TTL_SECONDS },
+    );
+  }
+
+  /** Verifies a challenge token and returns the user it belongs to. */
+  async verifyMfaChallenge(token: string): Promise<string> {
+    try {
+      const payload = await this.jwt.verifyAsync<{ sub?: string; typ?: string }>(token);
+
+      if (payload.typ !== MFA_CHALLENGE_TYPE || typeof payload.sub !== 'string') {
+        throw new Error('not an MFA challenge');
+      }
+
+      return payload.sub;
+    } catch {
+      // Expired, forged, or an access token presented as a challenge — all the same answer.
+      throw AppException.unauthenticated('Vérification MFA expirée. Reconnectez-vous.');
+    }
   }
 
   /** Opens a session and issues its first access and refresh pair. */

@@ -68,6 +68,7 @@ describe('loadEnv — authentication', () => {
         DATABASE_URL: 'postgres://x',
         JWT_ACCESS_SECRET: secret,
         JWT_REFRESH_SECRET: secret,
+        MFA_ENCRYPTION_KEY: 'c'.repeat(40),
       }),
     ).toThrow(/must differ/);
   });
@@ -78,6 +79,7 @@ describe('loadEnv — authentication', () => {
       DATABASE_URL: 'postgres://x',
       JWT_ACCESS_SECRET: 'a'.repeat(40),
       JWT_REFRESH_SECRET: 'b'.repeat(40),
+      MFA_ENCRYPTION_KEY: 'c'.repeat(40),
     });
 
     expect(env.auth.accessSecret).toBe('a'.repeat(40));
@@ -95,5 +97,97 @@ describe('loadEnv — authentication', () => {
     expect(() =>
       loadEnv({ NODE_ENV: 'development', ACCESS_TOKEN_TTL: '1h', REFRESH_TOKEN_TTL: '60m' }),
     ).toThrow(/must be longer than ACCESS_TOKEN_TTL/);
+  });
+
+  // ── Cookie policy ───────────────────────────────────────────────────────────
+  // These were drafted with the rest of the block and then never written down, which is worth being
+  // plain about: the file was 99 lines and its cookie, lockout and MFA assertions did not exist.
+
+  it('is not Secure outside production, because localhost is http', () => {
+    // Forcing Secure on would mean the browser never sends the cookie in development: login would
+    // appear to succeed and nothing would persist.
+    expect(loadEnv({ NODE_ENV: 'development' }).auth.cookie.secure).toBe(false);
+    expect(loadEnv({ NODE_ENV: 'test' }).auth.cookie.secure).toBe(false);
+  });
+
+  it('refuses SameSite=None without Secure, which browsers reject anyway', () => {
+    expect(() =>
+      loadEnv({ NODE_ENV: 'development', COOKIE_SAME_SITE: 'none', COOKIE_SECURE: 'false' }),
+    ).toThrow(/requires COOKIE_SECURE=true/);
+  });
+
+  it('accepts SameSite=None when the cookie is Secure', () => {
+    const env = loadEnv({ NODE_ENV: 'development', COOKIE_SAME_SITE: 'none', COOKIE_SECURE: 'true' });
+
+    expect(env.auth.cookie.sameSite).toBe('none');
+  });
+
+  it('refuses an unknown SameSite value', () => {
+    expect(() => loadEnv({ NODE_ENV: 'development', COOKIE_SAME_SITE: 'sometimes' })).toThrow(
+      /COOKIE_SAME_SITE must be one of/,
+    );
+  });
+
+  it('reads the cookie name and domain when they are set', () => {
+    const env = loadEnv({
+      NODE_ENV: 'development',
+      COOKIE_NAME: 'custom_refresh',
+      COOKIE_DOMAIN: '.chapfoody.test',
+    });
+
+    expect(env.auth.cookie.name).toBe('custom_refresh');
+    expect(env.auth.cookie.domain).toBe('.chapfoody.test');
+  });
+
+  // ── Lockout ─────────────────────────────────────────────────────────────────
+
+  it('reads the lockout policy', () => {
+    const env = loadEnv({
+      NODE_ENV: 'development',
+      MAX_FAILED_LOGIN_ATTEMPTS: '3',
+      LOCKOUT_DURATION: '1h',
+    });
+
+    expect(env.auth.lockout.maxFailedAttempts).toBe(3);
+    expect(env.auth.lockout.durationSeconds).toBe(3_600);
+  });
+
+  it('refuses a non-positive attempt count', () => {
+    expect(() => loadEnv({ NODE_ENV: 'development', MAX_FAILED_LOGIN_ATTEMPTS: '0' })).toThrow(
+      /must be a positive integer/,
+    );
+    expect(() => loadEnv({ NODE_ENV: 'development', MAX_FAILED_LOGIN_ATTEMPTS: 'lots' })).toThrow(
+      /must be a positive integer/,
+    );
+  });
+
+  it('reads the OAuth settings when they are present', () => {
+    const env = loadEnv({
+      NODE_ENV: 'development',
+      GOOGLE_CLIENT_ID: 'client-id',
+      GOOGLE_CLIENT_SECRET: 'client-secret',
+      GOOGLE_REDIRECT_URI: 'http://localhost:4000/v1/auth/google/callback',
+    });
+
+    expect(env.auth.google).toEqual({
+      clientId: 'client-id',
+      clientSecret: 'client-secret',
+      redirectUri: 'http://localhost:4000/v1/auth/google/callback',
+    });
+  });
+
+  it('falls back to a development key for the MFA secret box, and requires one in production', () => {
+    // A dev key reaching a deployment would encrypt every enrolled TOTP secret under a value published
+    // in this repository, so production must supply its own.
+    expect(loadEnv({ NODE_ENV: 'development' }).auth.mfa.encryptionKey).toMatch(/^dev-only-/);
+
+    expect(() =>
+      loadEnv({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgres://x',
+        JWT_ACCESS_SECRET: 'a'.repeat(40),
+        JWT_REFRESH_SECRET: 'b'.repeat(40),
+      }),
+    ).toThrow(/MFA_ENCRYPTION_KEY is required in production/);
   });
 });

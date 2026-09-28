@@ -6,7 +6,8 @@ import { API_ENV } from '../../config/env.token.js';
 import { hashPassword, verifyPassword } from '../../infra/crypto/password.js';
 import { PrismaService } from '../../infra/prisma/prisma.service.js';
 import { runAsTenant } from '../../infra/prisma/tenant-context.js';
-import { TokenService, type IssuedTokens } from './token.service.js';
+import { MfaService } from './mfa.service.js';
+import { MFA_CHALLENGE_TTL_SECONDS, TokenService, type IssuedTokens } from './token.service.js';
 
 export interface AuthenticatedUser {
   id: string;
@@ -25,6 +26,18 @@ export interface LoginResult {
   tokens: IssuedTokens;
   user: AuthenticatedUser;
 }
+
+/**
+ * What a correct password produces.
+ *
+ * Two outcomes rather than one, because a password is not always enough: an account with a second factor
+ * gets a short-lived challenge and no tokens at all. Modelling it as a single result with a nullable
+ * token would let a caller that forgot to check hand out an unauthenticated session, and the type makes
+ * that impossible to write by accident.
+ */
+export type LoginOutcome =
+  | { kind: 'session'; tokens: IssuedTokens; user: AuthenticatedUser }
+  | { kind: 'mfa_required'; challengeToken: string; expiresInSeconds: number };
 
 /**
  * A hash of a throwaway password, verified against when the e-mail matches no account.
@@ -52,6 +65,7 @@ export class AuthService {
     @Inject(API_ENV) private readonly env: ApiEnv,
     private readonly prisma: PrismaService,
     private readonly tokens: TokenService,
+    private readonly mfa: MfaService,
   ) {}
 
   async login(input: {
@@ -59,7 +73,7 @@ export class AuthService {
     password: string;
     ipAddress?: string | undefined;
     userAgent?: string | undefined;
-  }): Promise<LoginResult> {
+  }): Promise<LoginOutcome> {
     const client = this.prisma.getClient();
 
     // Normalised here because the column is documented as always lower-cased, and that is what makes
@@ -115,20 +129,98 @@ export class AuthService {
       throw AppException.unauthenticated('Identifiants invalides.');
     }
 
+    // The password is correct, so the attempt counters are cleared HERE rather than at the end: a user
+    // who passes the password step and then fails their second factor must not creep towards a lockout
+    // for a password they demonstrably know.
+    await client.user.update({
+      where: { id: user.id },
+      data: { failedLoginAttempts: 0, lockedUntil: null },
+    });
+
+    // ── The second factor ──────────────────────────────────────────────────────
+    // No session and no tokens: the caller gets a short-lived challenge and nothing else. This is the
+    // DoD made concrete — an account with MFA enabled cannot obtain a token from the password alone.
+    if (await this.mfa.isEnabled(user.id)) {
+      return {
+        kind: 'mfa_required',
+        challengeToken: await this.tokens.signMfaChallenge(user.id),
+        expiresInSeconds: MFA_CHALLENGE_TTL_SECONDS,
+      };
+    }
+
+    return { kind: 'session', ...(await this.openSession(user, input)) };
+  }
+
+  /**
+   * Second step of a login that owes a second factor.
+   *
+   * The user is loaded again rather than trusted from the challenge token: five minutes is long enough
+   * for an account to be suspended or deleted in between, and the challenge was issued before that.
+   */
+  async verifyMfa(input: {
+    challengeToken: string;
+    code: string;
+    ipAddress?: string | undefined;
+    userAgent?: string | undefined;
+  }): Promise<LoginOutcome> {
+    const userId = await this.tokens.verifyMfaChallenge(input.challengeToken);
+
+    if (!(await this.mfa.verifyForUser(userId, input.code))) {
+      throw AppException.unauthenticated('Code de vérification invalide.');
+    }
+
+    const user = await this.prisma.getClient().user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        firstName: true,
+        lastName: true,
+        status: true,
+        platformRole: true,
+        mustChangePassword: true,
+        emailVerifiedAt: true,
+        locale: true,
+        deletedAt: true,
+      },
+    });
+
+    // Same 401 as a wrong password: whether the account was suspended between the two steps is not
+    // something an attacker holding a challenge token needs to learn.
+    if (user === null || user.deletedAt !== null || user.status !== 'ACTIVE') {
+      throw AppException.unauthenticated('Identifiants invalides.');
+    }
+
+    return { kind: 'session', ...(await this.openSession(user, input)) };
+  }
+
+  /** Opens the session and records the sign-in, as the last step shared by both login paths. */
+  private async openSession(
+    user: {
+      id: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      status: string;
+      platformRole: string | null;
+      mustChangePassword: boolean;
+      emailVerifiedAt: Date | null;
+      locale: string;
+    },
+    context: { ipAddress?: string | undefined; userAgent?: string | undefined },
+  ): Promise<LoginResult> {
     const activeBusinessId = await this.defaultBusinessId(user.id);
 
     const tokens = await this.tokens.startSession({
       userId: user.id,
       businessId: activeBusinessId,
-      ipAddress: input.ipAddress,
-      userAgent: input.userAgent,
+      ipAddress: context.ipAddress,
+      userAgent: context.userAgent,
     });
 
-    // Counters reset and the sign-in recorded only once everything else has succeeded: a login that
-    // fails at the last step must not clear the lockout counter.
-    await client.user.update({
+    await this.prisma.getClient().user.update({
       where: { id: user.id },
-      data: { failedLoginAttempts: 0, lockedUntil: null, lastLoginAt: new Date() },
+      data: { lastLoginAt: new Date() },
     });
 
     return {

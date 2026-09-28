@@ -19,6 +19,8 @@ import { CurrentUser, Public } from './auth.decorators.js';
 import { AuthService } from './auth.service.js';
 import type { AuthPrincipal } from './auth.types.js';
 import { LoginDto } from './dto/login.dto.js';
+import { MfaCodeDto, MfaVerifyDto } from './dto/mfa.dto.js';
+import { MfaService } from './mfa.service.js';
 import {
   readRefreshCookie,
   refreshCookieName,
@@ -31,6 +33,33 @@ interface SessionResponseBody {
   expiresIn: number;
   mustChangePassword: boolean;
   user: unknown;
+}
+
+/**
+ * What a correct password returns when the account has a second factor.
+ *
+ * No access token and no refresh cookie — only a challenge, which is the point. `mfaRequired` is a
+ * literal so a client can distinguish the two responses without inferring it from a missing field.
+ */
+interface MfaRequiredResponseBody {
+  mfaRequired: true;
+  challengeToken: string;
+  expiresInSeconds: number;
+}
+
+interface MfaEnrolmentResponseBody {
+  secret: string;
+  otpauthUri: string;
+}
+
+interface MfaConfirmationResponseBody {
+  recoveryCodes: string[];
+}
+
+interface MfaStatusResponseBody {
+  enabled: boolean;
+  confirmedAt: string | null;
+  recoveryCodesRemaining: number;
 }
 
 /**
@@ -51,6 +80,7 @@ export class AuthController {
   constructor(
     @Inject(API_ENV) private readonly env: ApiEnv,
     private readonly auth: AuthService,
+    private readonly mfa: MfaService,
   ) {}
 
   @Public()
@@ -66,25 +96,35 @@ export class AuthController {
     @Body() dto: LoginDto,
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
-  ): Promise<SessionResponseBody> {
-    const result = await this.auth.login({
+  ): Promise<SessionResponseBody | MfaRequiredResponseBody> {
+    const outcome = await this.auth.login({
       email: dto.email,
       password: dto.password,
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'],
     });
 
+    // The cookie is set INSIDE this branch, not before it. Setting it unconditionally is the mistake
+    // that would hand out a refresh token to a caller who has only passed the first factor.
+    if (outcome.kind === 'mfa_required') {
+      return {
+        mfaRequired: true,
+        challengeToken: outcome.challengeToken,
+        expiresInSeconds: outcome.expiresInSeconds,
+      };
+    }
+
     response.cookie(
       refreshCookieName(this.env),
-      result.tokens.refreshToken,
+      outcome.tokens.refreshToken,
       refreshCookieOptions(this.env, true),
     );
 
     return {
-      accessToken: result.tokens.accessToken,
-      expiresIn: result.tokens.accessExpiresInSeconds,
-      mustChangePassword: result.user.mustChangePassword,
-      user: result.user,
+      accessToken: outcome.tokens.accessToken,
+      expiresIn: outcome.tokens.accessExpiresInSeconds,
+      mustChangePassword: outcome.user.mustChangePassword,
+      user: outcome.user,
     };
   }
 
@@ -145,5 +185,104 @@ export class AuthController {
   @ApiOperation({ summary: 'The authenticated caller' })
   me(@CurrentUser() principal: AuthPrincipal): Promise<unknown> {
     return this.auth.me(principal.userId, principal.businessId);
+  }
+
+  // ── MFA ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * The second step of a login.
+   *
+   * Public because the caller has no session yet — the challenge token IS the credential, issued only
+   * after a correct password. It is the only place a challenge token is accepted.
+   */
+  @Public()
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Complete a sign-in that requires a second factor',
+    description: 'Exchanges a challenge token and a TOTP or recovery code for a session.',
+  })
+  async verifyMfa(
+    @Body() dto: MfaVerifyDto,
+    @Req() request: Request,
+    @Res({ passthrough: true }) response: Response,
+  ): Promise<SessionResponseBody> {
+    const outcome = await this.auth.verifyMfa({
+      challengeToken: dto.challengeToken,
+      code: dto.code,
+      ipAddress: request.ip,
+      userAgent: request.headers['user-agent'],
+    });
+
+    // `verifyMfa` re-checks the account, so this is a session in every case that gets here.
+    if (outcome.kind !== 'session') {
+      throw AppException.unauthenticated('Vérification MFA expirée. Reconnectez-vous.');
+    }
+
+    response.cookie(
+      refreshCookieName(this.env),
+      outcome.tokens.refreshToken,
+      refreshCookieOptions(this.env, true),
+    );
+
+    return {
+      accessToken: outcome.tokens.accessToken,
+      expiresIn: outcome.tokens.accessExpiresInSeconds,
+      mustChangePassword: outcome.user.mustChangePassword,
+      user: outcome.user,
+    };
+  }
+
+  /** Starts enrolment. Requires a session, because it replaces any existing secret. */
+  @Post('mfa/enroll')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Begin TOTP enrolment',
+    description: 'Returns the secret and otpauth URI. Not active until confirmed with a code.',
+  })
+  enrollMfa(@CurrentUser() principal: AuthPrincipal): Promise<MfaEnrolmentResponseBody> {
+    return this.mfa.beginEnrolment(principal.userId);
+  }
+
+  /**
+   * Completes enrolment and returns the recovery codes.
+   *
+   * The ONLY response that ever contains them: only hashes are stored, so this cannot be repeated. The
+   * client must show them before navigating away.
+   */
+  @Post('mfa/confirm')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Confirm TOTP enrolment',
+    description: 'Activates MFA and returns the recovery codes. These are shown once, and never again.',
+  })
+  async confirmMfa(@CurrentUser() principal: AuthPrincipal, @Body() dto: MfaCodeDto): Promise<MfaConfirmationResponseBody> {
+    return this.mfa.confirmEnrolment(principal.userId, dto.code);
+  }
+
+  /**
+   * Turns MFA off.
+   *
+   * A code is required even though the caller is authenticated: disabling the second factor is exactly
+   * what a stolen session would be used for.
+   */
+  @Post('mfa/disable')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Turn MFA off', description: 'Requires a current code from the device.' })
+  async disableMfa(@CurrentUser() principal: AuthPrincipal, @Body() dto: MfaCodeDto): Promise<void> {
+    await this.mfa.disable(principal.userId, dto.code);
+  }
+
+  /** Whether the account is protected, and how many recovery codes are left unspent. */
+  @Get('mfa/status')
+  @ApiOperation({ summary: 'The MFA state of the authenticated caller' })
+  async mfaStatus(@CurrentUser() principal: AuthPrincipal): Promise<MfaStatusResponseBody> {
+    const status = await this.mfa.status(principal.userId);
+
+    return {
+      enabled: status.enabled,
+      confirmedAt: status.confirmedAt?.toISOString() ?? null,
+      recoveryCodesRemaining: status.recoveryCodesRemaining,
+    };
   }
 }

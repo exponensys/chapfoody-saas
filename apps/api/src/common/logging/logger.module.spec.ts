@@ -55,6 +55,7 @@ describe('buildPinoHttpOptions', () => {
           // wants a production environment has to be a realistic one.
           JWT_ACCESS_SECRET: 'a'.repeat(40),
           JWT_REFRESH_SECRET: 'b'.repeat(40),
+          MFA_ENCRYPTION_KEY: 'c'.repeat(40),
         }),
       )?.transport,
     ).toBeUndefined();
