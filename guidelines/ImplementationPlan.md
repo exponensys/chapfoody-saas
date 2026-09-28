@@ -754,7 +754,7 @@ change without a migration is forbidden by review.
 
 ### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
 
-**Progress** — seven slices done, all tested.
+**Progress** — eight slices done, all tested.
 
 *Configuration* (35 tests, now 53 including the blocks that were missing — see the note at the end).
 Signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer, the MFA secret-box key and
@@ -863,6 +863,29 @@ as a value, so this completes the design rather than inventing a convention. E-m
 can never be presented as one that resets a password. Delivery is a `debug` log for now: the email service
 through BullMQ is a later slice, and logging keeps the flow walkable locally instead of a dead end.
 
+*Rate limiting* (5 e2e tests) — `@nestjs/throttler`, registered as the **first** global guard, because the
+whole point is to reject a flood **before** the expensive work rather than after it; the suite asserts the
+observable consequence rather than the registration order. The limits differ by route for a reason: the
+global ceiling is generous (a dashboard makes a dozen requests before anybody blinks, and a limit a real
+session trips is a limit that gets switched off), while sign-in gets ten a minute — far above human use,
+far below what a credential spray needs. This is the complement to lockout, not a duplicate of it: lockout
+is per **account** and stops one password being guessed, throttling is per **client** and stops one guess
+being sprayed across ten thousand accounts, which is the attack lockout cannot see because no single
+account ever accumulates failures. Health probes are `@SkipThrottle()` — the orchestrator polls them from
+one address every few seconds, and throttling them would make a load balancer kill healthy instances. And
+`trust proxy` is set in production, without which every request appears to come from the load balancer and
+the per-client limit silently becomes a global one that a single busy client can trigger.
+
+**Deliberately not done: Redis-backed throttler storage.** In-process storage means the limit is per
+instance. Redis is the fix, and the obvious wiring is worse than the limitation: `buildRedisConnection`
+sets `maxRetriesPerRequest: null`, which BullMQ requires and which is wrong on a request path — a command
+issued while the connection is down is retried forever instead of failing, so **a Redis outage would hang
+every request** and the component that exists to absorb abuse would become the outage. It needs a wrapper
+that fails fast (`enableOfflineQueue: false`, a small retry budget), bounds each increment, falls back to
+in-process counting, and has a test proving requests still succeed with Redis unavailable. That is written
+down in `throttling.module.ts` rather than left as a TODO, because the next person to reach for it will
+reach for the one-liner.
+
 **Findings worth recording** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS, so it
 failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11. `otplib@13` fails the same
 way for a subtler reason: its `main` is CJS, but a transitive plugin resolves to TypeScript source under
@@ -880,10 +903,18 @@ cookie-policy, lockout and MFA assertions had been drafted and then never writte
 updating the file for the MFA key, not by a failing test — worth noting, because nothing in the suite
 could have caught an assertion that was never made.
 
-**Still to do in M3** — throttling (`@nestjs/throttler`), the audit interceptor, the email service through
-BullMQ (which is what turns the verification log line into a real link), the session-listing endpoints, and
+**Still to do in M3** — the audit interceptor; the email service through BullMQ (which is what turns the
+verification log line into a real link); Redis-backed throttler storage; the session-listing endpoints; and
 step-up verification for sensitive endpoints (the challenge mechanism exists and is reused for
 `mfa/disable`, which already demands a current code).
+
+**A constraint the audit interceptor has to respect**, found while reading the policies: `audit_log` is
+append-only (no UPDATE and no DELETE policy exists, so both are denied outright) and its INSERT policy
+allows a row only when `business_id = cf_current_business_id()`, OR when both are NULL. So an audit write
+is not a plain `create`: the row's `businessId` has to match the tenant context it is written in, which
+means tenant actions go through `runAsTenant({ businessId, userId }, …)` and platform actions (login,
+sign-in, billing) are written with NO tenant context at all. Writing them inside whatever context the
+request happens to have is the mistake that would make a tenant's actions silently fail to record.
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 
@@ -911,6 +942,10 @@ step-up verification for sensitive endpoints (the challenge mechanism exists and
 5. Guards: `JwtAuthGuard`, `RolesGuard` (RBAC), `TenantGuard`, **`EntitlementGuard`** with a
    `@RequiresFeature('marketing.campaigns')` decorator — the server is the only source of truth for premium access.
 6. Rate limiting (`@nestjs/throttler`, Redis-backed) and account lockout on the auth endpoints.
+   `[~]` Lockout is done (in login). Rate limiting is done with **in-process** storage, which is the honest
+   half: the limits are enforced, but per instance, so behind four replicas the effective ceiling is four
+   times what is configured. Redis-backed storage is deliberately NOT wired yet — see the slice note below
+   for the specific hazard that makes the obvious wiring worse than the limitation.
 7. `AuditLog` interceptor on every write; login, MFA and session events recorded.
 8. Email service abstraction (verification, reset, MFA recovery) dispatched through BullMQ.
 9. Session management endpoints so Settings → Sécurité can list and revoke sessions.
