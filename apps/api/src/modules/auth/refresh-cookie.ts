@@ -1,4 +1,5 @@
 import type { ApiEnv } from '../../config/env.js';
+import { readCookie, type CookieOptions } from './cookies.js';
 
 /**
  * The refresh cookie.
@@ -17,14 +18,9 @@ import type { ApiEnv } from '../../config/env.js';
 /** The one path the refresh cookie is sent to. */
 export const REFRESH_COOKIE_PATH = '/v1/auth';
 
-export interface CookieOptions {
-  httpOnly: true;
-  secure: boolean;
-  sameSite: 'lax' | 'strict' | 'none';
-  path: string;
-  domain?: string;
-  maxAge?: number;
-}
+// Re-exported so that callers importing it from here keep working now that the shape lives with the
+// shared cookie plumbing.
+export type { CookieOptions };
 
 export function refreshCookieOptions(env: ApiEnv, withMaxAge: boolean): CookieOptions {
   return {
@@ -44,41 +40,10 @@ export function refreshCookieName(env: ApiEnv): string {
 /**
  * Reads the refresh cookie out of the `Cookie` header.
  *
- * Hand-rolled rather than adding `cookie-parser`, matching how this codebase treated `@nestjs/config`:
- * the parse is a handful of lines, and a dependency that rewrites `req.cookies` for every route is a
- * large surface for one value read on one endpoint.
- *
- * Splitting on the first `=` matters: the token is base64url and may itself contain no `=` padding, but
- * a cookie value in general can, and splitting on every `=` would truncate it.
+ * Delegates to the shared reader in `cookies.ts`, which the OAuth state cookie and the MFA challenge
+ * cookie also use. It used to carry its own copy of the parse, and two copies of "split on the first ="
+ * is exactly the kind of thing that drifts while both look correct.
  */
 export function readRefreshCookie(env: ApiEnv, header: string | undefined): string | undefined {
-  if (header === undefined || header === '') {
-    return undefined;
-  }
-
-  const name = refreshCookieName(env);
-
-  for (const part of header.split(';')) {
-    const separator = part.indexOf('=');
-
-    if (separator === -1) {
-      continue;
-    }
-
-    if (part.slice(0, separator).trim() !== name) {
-      continue;
-    }
-
-    const value = part.slice(separator + 1).trim();
-
-    try {
-      // A `%` that is not valid percent-encoding would throw; an undecodable value is simply not our
-      // cookie, so the raw text is returned and rejected downstream by the hash lookup.
-      return decodeURIComponent(value);
-    } catch {
-      return value;
-    }
-  }
-
-  return undefined;
+  return readCookie(header, refreshCookieName(env));
 }

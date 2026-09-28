@@ -20,6 +20,7 @@ export function makeTestEnv(overrides: Partial<ApiEnv> = {}): ApiEnv {
     databaseUrl: undefined,
     redisUrl: undefined,
     corsOrigins: [],
+    frontendUrl: 'http://localhost:3000',
     logLevel: 'silent',
     swaggerEnabled: false,
     auth: {

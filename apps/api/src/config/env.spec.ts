@@ -24,6 +24,8 @@ describe('loadEnv defaults', () => {
       databaseUrl: undefined,
       redisUrl: undefined,
       corsOrigins: DEFAULT_CORS_ORIGINS,
+      // The first CORS origin, so the SPA and the OAuth redirect target cannot disagree.
+      frontendUrl: DEFAULT_CORS_ORIGINS[0],
       logLevel: 'debug',
       swaggerEnabled: true,
       // Asserted by shape rather than by value: the authentication block has its own suite

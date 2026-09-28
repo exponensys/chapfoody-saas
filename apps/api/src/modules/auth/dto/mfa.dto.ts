@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsString, Matches, MaxLength, MinLength } from 'class-validator';
+import { IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator';
 
 /**
  * MFA input.
@@ -23,13 +23,22 @@ export class MfaCodeDto {
 
 /** The second step of a login. Accepts a TOTP code or one of the recovery codes. */
 export class MfaVerifyDto {
+  /**
+   * The challenge token from a login that reported `mfaRequired`.
+   *
+   * Optional because the Google flow has no request body: there the challenge arrives in a cookie, and
+   * requiring it in the body would mean either putting a credential in the redirect URL or making the
+   * app post it back for no reason.
+   */
   @ApiProperty({
-    description: 'The challenge token returned by a login that reported mfaRequired.',
+    required: false,
+    description: 'The challenge token from a login that reported mfaRequired. Cookie-based flow may omit it.',
   })
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(4096)
-  challengeToken!: string;
+  challengeToken?: string;
 
   @ApiProperty({ example: '123456', description: 'A six-digit code, or a recovery code.' })
   @IsString()

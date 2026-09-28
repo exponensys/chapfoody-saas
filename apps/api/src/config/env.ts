@@ -33,6 +33,14 @@ export interface ApiEnv {
   /** Redis connection string. Undefined disables the queue instead of breaking boot. */
   redisUrl: string | undefined;
   corsOrigins: string[];
+  /**
+   * Where the browser is returned to after an OAuth callback.
+   *
+   * The first allowed CORS origin, because the browser app and the redirect target are the same thing by
+   * definition — a second variable would only be a way for the two to disagree, and the failure mode is
+   * a redirect to an origin the SPA cannot read cookies from.
+   */
+  frontendUrl: string;
   logLevel: LogLevel;
   /** Swagger is served in every environment except production, where it stays off. */
   swaggerEnabled: boolean;
@@ -116,7 +124,13 @@ export const DEFAULT_LOCKOUT_DURATION = '15m';
 export const DEFAULT_MFA_ISSUER = 'Chapfoody';
 
 export const DEFAULT_PORT = 4000;
-export const DEFAULT_CORS_ORIGINS = ['http://localhost:3000'];
+/**
+ * Allowed browser origins when nothing is configured.
+ *
+ * Declared as a non-empty tuple so that `frontendUrl` — which is the first of these — is a `string`
+ * rather than `string | undefined`, without a second constant duplicating the address.
+ */
+export const DEFAULT_CORS_ORIGINS: readonly [string, ...string[]] = ['http://localhost:3000'];
 
 function parseEnum<T extends string>(
   value: string | undefined,
@@ -315,12 +329,15 @@ export function loadEnv(source: EnvSource = process.env): ApiEnv {
       ? nodeEnv !== 'production'
       : source.SWAGGER_ENABLED.trim().toLowerCase() === 'true';
 
+  const corsOrigins = parseList(source.CORS_ORIGINS, DEFAULT_CORS_ORIGINS);
+
   return {
     nodeEnv,
     port,
     databaseUrl,
     redisUrl,
-    corsOrigins: parseList(source.CORS_ORIGINS, DEFAULT_CORS_ORIGINS),
+    corsOrigins,
+    frontendUrl: corsOrigins[0] ?? DEFAULT_CORS_ORIGINS[0],
     logLevel,
     swaggerEnabled,
     auth: parseAuth(source, nodeEnv),

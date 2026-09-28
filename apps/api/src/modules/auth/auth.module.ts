@@ -7,6 +7,7 @@ import { API_ENV } from '../../config/env.token.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
 import { EntitlementGuard } from './entitlement.guard.js';
+import { GoogleOAuthService } from './google-oauth.service.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { MfaService } from './mfa.service.js';
 import { RolesGuard } from './roles.guard.js';
@@ -46,8 +47,9 @@ import { TokenService } from './token.service.js';
   ],
   controllers: [AuthController],
   providers: [
+    TokenService,
     MfaService,
-  TokenService,
+    GoogleOAuthService,
     AuthService,
     // ORDER MATTERS. Nest runs global guards in registration order, and each one depends on the last:
     // the token is verified, then the membership is resolved from the verified identity, then the role

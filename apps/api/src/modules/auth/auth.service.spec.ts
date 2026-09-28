@@ -3,6 +3,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service.js';
 import { makeTestEnv } from '../../../test/helpers/test-env.js';
 import type { ApiEnv } from '../../config/env.js';
 import { AuthService } from './auth.service.js';
+import type { GoogleOAuthService } from './google-oauth.service.js';
 import type { MfaService } from './mfa.service.js';
 import type { TokenService } from './token.service.js';
 
@@ -28,7 +29,10 @@ describe('AuthService — MFA gating', () => {
   const env = makeTestEnv() as ApiEnv;
   const password = 'Resto123#@!$';
 
-  let client: { user: { findUnique: jest.Mock; update: jest.Mock } };
+  let client: {
+    user: { findUnique: jest.Mock; update: jest.Mock; create: jest.Mock };
+    account: { findUnique: jest.Mock; create: jest.Mock };
+  };
   let tokens: {
     startSession: jest.Mock;
     signMfaChallenge: jest.Mock;
@@ -36,6 +40,7 @@ describe('AuthService — MFA gating', () => {
     revokeSession: jest.Mock;
   };
   let mfa: { isEnabled: jest.Mock; verifyForUser: jest.Mock };
+  let google: { authorizationUrl: jest.Mock; exchangeCode: jest.Mock };
   let service: AuthService;
   let passwordHash: string;
 
@@ -62,7 +67,14 @@ describe('AuthService — MFA gating', () => {
   });
 
   beforeEach(() => {
-    client = { user: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) } };
+    client = {
+      user: {
+        findUnique: jest.fn(),
+        update: jest.fn().mockResolvedValue({}),
+        create: jest.fn(),
+      },
+      account: { findUnique: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue({}) },
+    };
 
     tokens = {
       startSession: jest.fn().mockResolvedValue({
@@ -77,11 +89,14 @@ describe('AuthService — MFA gating', () => {
 
     mfa = { isEnabled: jest.fn().mockResolvedValue(false), verifyForUser: jest.fn() };
 
+    google = { authorizationUrl: jest.fn(), exchangeCode: jest.fn() };
+
     service = new AuthService(
       env,
       { getClient: () => client } as unknown as PrismaService,
       tokens as unknown as TokenService,
       mfa as unknown as MfaService,
+      google as unknown as GoogleOAuthService,
     );
   });
 
@@ -189,6 +204,124 @@ describe('AuthService — MFA gating', () => {
       client.user.findUnique.mockResolvedValue(userRow({ deletedAt: new Date() }));
 
       await expect(verify()).rejects.toThrow(/Identifiants invalides/);
+    });
+  });
+
+  describe('loginWithGoogle — linking rules', () => {
+    const identity = (overrides: Record<string, unknown> = {}) => ({
+      providerAccountId: 'google-sub-1',
+      email: 'resto@email.com',
+      emailVerified: true,
+      firstName: 'Awa',
+      lastName: 'Diallo',
+      avatarUrl: undefined as string | undefined,
+      ...overrides,
+    });
+
+    const login = (overrides: Record<string, unknown> = {}) =>
+      service.loginWithGoogle(identity(overrides), {});
+
+    it('signs in through an existing link without consulting the e-mail at all', async () => {
+      client.account.findUnique.mockResolvedValue({ userId: 'user-1' });
+      client.user.findUnique.mockResolvedValue(userRow());
+
+      const outcome = await login();
+
+      expect(outcome.kind).toBe('session');
+      // `sub` is stable and cannot be renamed; the address is only a linking hint.
+      expect(client.account.create).not.toHaveBeenCalled();
+    });
+
+    it('links to an existing, VERIFIED account and signs it in', async () => {
+      client.user.findUnique.mockResolvedValue(userRow({ emailVerifiedAt: new Date() }));
+
+      const outcome = await login();
+
+      expect(outcome.kind).toBe('session');
+      expect(client.account.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            userId: 'user-1',
+            provider: 'GOOGLE',
+            providerAccountId: 'google-sub-1',
+          }),
+        }),
+      );
+    });
+
+    it('REFUSES to link to an existing account whose e-mail was never verified', async () => {
+      // The pre-registration attack: someone signs up with the victim's address and a password they
+      // know. If a later Google sign-in silently merged with that row, the attacker's password would
+      // open the victim's account.
+      client.user.findUnique.mockResolvedValue(userRow({ emailVerifiedAt: null }));
+
+      await expect(login()).rejects.toThrow(/Connectez-vous avec votre mot de passe/);
+      expect(client.account.create).not.toHaveBeenCalled();
+      expect(tokens.startSession).not.toHaveBeenCalled();
+    });
+
+    it('creates the account for an address nobody has seen', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue(userRow({ email: 'new@email.com' }));
+
+      const outcome = await login({ email: 'new@email.com' });
+
+      expect(outcome.kind).toBe('session');
+
+      const created = client.user.create.mock.calls[0][0].data;
+
+      expect(created.emailVerifiedAt).toBeInstanceOf(Date);
+      // A placeholder hash would be a password nobody chose.
+      expect(created).not.toHaveProperty('passwordHash');
+      expect(created.accounts.create.provider).toBe('GOOGLE');
+    });
+
+    it('does not mark the address verified when Google has not', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue(userRow());
+
+      await login({ emailVerified: false });
+
+      expect(client.user.create.mock.calls[0][0].data.emailVerifiedAt).toBeNull();
+    });
+
+    it('STILL demands the second factor, so Google is not an MFA bypass', async () => {
+      // Without this, every account with MFA would have a documented way around it.
+      client.account.findUnique.mockResolvedValue({ userId: 'user-1' });
+      client.user.findUnique.mockResolvedValue(userRow());
+      mfa.isEnabled.mockResolvedValue(true);
+
+      const outcome = await login();
+
+      expect(outcome.kind).toBe('mfa_required');
+      expect(tokens.startSession).not.toHaveBeenCalled();
+    });
+
+    it('refuses a linked account that has since been suspended', async () => {
+      client.account.findUnique.mockResolvedValue({ userId: 'user-1' });
+      client.user.findUnique.mockResolvedValue(userRow({ status: 'SUSPENDED' }));
+
+      await expect(login()).rejects.toThrow(/Identifiants invalides/);
+      expect(tokens.startSession).not.toHaveBeenCalled();
+    });
+
+    it('survives two callbacks racing on the same new account', async () => {
+      // A double-click produces two callbacks. The loser gets a unique violation and must end up using
+      // the row the winner created rather than failing the sign-in.
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+      // The retry re-resolves, and this time the account exists.
+      client.account.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ userId: 'user-1' });
+      client.user.findUnique
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(userRow());
+
+      const outcome = await login();
+
+      expect(outcome.kind).toBe('session');
     });
   });
 });

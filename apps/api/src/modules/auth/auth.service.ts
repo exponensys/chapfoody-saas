@@ -7,6 +7,8 @@ import { hashPassword, verifyPassword } from '../../infra/crypto/password.js';
 import { PrismaService } from '../../infra/prisma/prisma.service.js';
 import { runAsTenant } from '../../infra/prisma/tenant-context.js';
 import { MfaService } from './mfa.service.js';
+import type { GoogleIdentity } from './google-oauth.service.js';
+import { GoogleOAuthService } from './google-oauth.service.js';
 import { MFA_CHALLENGE_TTL_SECONDS, TokenService, type IssuedTokens } from './token.service.js';
 
 export interface AuthenticatedUser {
@@ -40,6 +42,58 @@ export type LoginOutcome =
   | { kind: 'mfa_required'; challengeToken: string; expiresInSeconds: number };
 
 /**
+ * The user fields a sign-in path needs.
+ *
+ * Structural rather than a Prisma payload type, so the same shape can be produced by a `select` on
+ * `User` and handed to `openSession` without either side importing the other's generated types.
+ */
+interface SignInUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  status: string;
+  platformRole: string | null;
+  mustChangePassword: boolean;
+  emailVerifiedAt: Date | null;
+  locale: string;
+  deletedAt: Date | null;
+}
+
+/**
+ * Whether an error is Prisma's unique-constraint violation.
+ *
+ * Checked on `code` rather than with `instanceof`, so it does not depend on which module instance the
+ * generated client came from — the distinction that makes `instanceof` unreliable across a generated
+ * client and its runtime.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  return typeof error === 'object' && error !== null && (error as { code?: unknown }).code === 'P2002';
+}
+
+const GOOGLE_SCOPE = 'openid email profile';
+
+/**
+ * The user fields a session needs, plus the ones that decide whether one may be opened at all.
+ *
+ * One constant rather than the same ten-line `select` written out on every sign-in path, which is how a
+ * field ends up missing from the path somebody added last — and the failure is a `403` that makes no
+ * sense rather than a compile error.
+ */
+const SIGN_IN_USER_FIELDS = {
+  id: true,
+  email: true,
+  firstName: true,
+  lastName: true,
+  status: true,
+  platformRole: true,
+  mustChangePassword: true,
+  emailVerifiedAt: true,
+  locale: true,
+  deletedAt: true,
+} as const;
+
+/**
  * A hash of a throwaway password, verified against when the e-mail matches no account.
  *
  * Without it, a login attempt for an unknown address returns in microseconds while a known one takes
@@ -66,6 +120,7 @@ export class AuthService {
     private readonly prisma: PrismaService,
     private readonly tokens: TokenService,
     private readonly mfa: MfaService,
+    private readonly google: GoogleOAuthService,
   ) {}
 
   async login(input: {
@@ -192,6 +247,187 @@ export class AuthService {
     }
 
     return { kind: 'session', ...(await this.openSession(user, input)) };
+  }
+
+  /**
+   * The consent URL for a Google sign-in, with a state the browser will be held to.
+   *
+   * The caller stores the state in a cookie; the callback compares it. See `google-state.ts` for what
+   * that defends against.
+   */
+  googleAuthorizationUrl(state: string): string {
+    return this.google.authorizationUrl(state);
+  }
+
+  /** Exchanges a Google authorization code for the identity behind it. */
+  exchangeGoogleCode(code: string): Promise<GoogleIdentity> {
+    return this.google.exchangeCode(code);
+  }
+
+  /**
+   * Signs in the person behind a verified Google identity.
+   *
+   * ── The second factor is NOT skipped ────────────────────────────────────────
+   * An account with MFA gets the same challenge it gets from a password. Without this, "Sign in with
+   * Google" would be a documented bypass of the second factor for every account that has one — the
+   * feature would look present and be absent exactly where it matters.
+   *
+   * ── Identity is resolved in `sub` order, then e-mail ────────────────────────
+   * A known `Account` row wins, because `sub` cannot be renamed. The e-mail is only consulted to LINK a
+   * previously password-based account, and only under the rules in `resolveGoogleUser`.
+   */
+  async loginWithGoogle(
+    identity: GoogleIdentity,
+    context: { ipAddress?: string | undefined; userAgent?: string | undefined },
+  ): Promise<LoginOutcome> {
+    const user = await this.resolveGoogleUser(identity);
+
+    if (await this.mfa.isEnabled(user.id)) {
+      return {
+        kind: 'mfa_required',
+        challengeToken: await this.tokens.signMfaChallenge(user.id),
+        expiresInSeconds: MFA_CHALLENGE_TTL_SECONDS,
+      };
+    }
+
+    return { kind: 'session', ...(await this.openSession(user, context)) };
+  }
+
+  /**
+   * Finds the user a Google identity belongs to, linking or creating as the rules allow.
+   *
+   * ── Linking to an existing account, and the attack it has to survive ────────
+   * The dangerous case is a pre-registered account: somebody signs up with `victim@example.com` and a
+   * password they know, and when the real owner later uses "Sign in with Google" the flows are merged
+   * and the attacker's password now opens the victim's account.
+   *
+   * The defence is `emailVerifiedAt`: Google only confirms the e-mail when the person controls the
+   * mailbox, so linking is safe for an account that has PROVEN its address and refused for one that has
+   * not. The refusal is explicit and actionable (sign in with your password, then link from settings)
+   * rather than a silent merge, because the alternative is an attacker's account quietly absorbing a
+   * legitimate sign-in.
+   *
+   * ── Creating on first sight ─────────────────────────────────────────────────
+   * A brand-new address creates a user, so "Continue with Google" works for a first-time visitor. The
+   * account starts with no password and no business membership, which means it can sign in and do
+   * nothing else until it is invited or starts a business — harmless, and the behaviour a Google button
+   * leads people to expect. This is a product decision rather than a security one, and the switch is
+   * this method.
+   */
+  private async resolveGoogleUser(identity: GoogleIdentity): Promise<SignInUser> {
+    const client = this.prisma.getClient();
+
+    const link = await client.account.findUnique({
+      where: {
+        provider_providerAccountId: {
+          provider: 'GOOGLE',
+          providerAccountId: identity.providerAccountId,
+        },
+      },
+      select: { userId: true },
+    });
+
+    if (link !== null) {
+      const linked = await client.user.findUnique({
+        where: { id: link.userId },
+        select: SIGN_IN_USER_FIELDS,
+      });
+
+      // A linked account that is now suspended or deleted: same 401 as anywhere else, so nobody learns
+      // the state of an account they cannot sign in to.
+      if (linked === null || linked.deletedAt !== null || linked.status !== 'ACTIVE') {
+        throw AppException.unauthenticated('Identifiants invalides.');
+      }
+
+      return linked;
+    }
+
+    const existing = await client.user.findUnique({
+      where: { email: identity.email },
+      select: SIGN_IN_USER_FIELDS,
+    });
+
+    if (existing !== null) {
+      if (existing.deletedAt !== null || existing.status !== 'ACTIVE') {
+        throw AppException.unauthenticated('Identifiants invalides.');
+      }
+
+      if (existing.emailVerifiedAt === null) {
+        throw AppException.forbidden(
+          'Un compte existe déjà avec cette adresse. Connectez-vous avec votre mot de passe, puis liez Google depuis vos paramètres de sécurité.',
+        );
+      }
+
+      await this.linkAccount(existing.id, identity);
+
+      return existing;
+    }
+
+    return this.createGoogleUser(identity);
+  }
+
+  /**
+   * Records the link between a user and a Google account.
+   *
+   * No `accessToken` or `refreshToken` is stored. The flow is `access_type: 'online'` and nothing here
+   * calls Google on the user's behalf afterwards, so those columns would hold a credential that is never
+   * used — a liability with no reader. They exist on `Account` for the providers that do need them.
+   */
+  private async linkAccount(userId: string, identity: GoogleIdentity): Promise<void> {
+    try {
+      await this.prisma.getClient().account.create({
+        data: {
+          userId,
+          provider: 'GOOGLE',
+          providerAccountId: identity.providerAccountId,
+          scope: GOOGLE_SCOPE,
+        },
+      });
+    } catch (error) {
+      // Two callbacks arrived at once — a double-click, or a redirect the browser retried. The other
+      // one linked it; the link is what matters, not which request wrote it.
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Creates the account for a Google identity nobody has seen before.
+   *
+   * `emailVerifiedAt` comes from Google's own verification, and it is not cosmetic: it is what allows
+   * this user to link a Google sign-in later without hitting the pre-registration defence above.
+   */
+  private async createGoogleUser(identity: GoogleIdentity): Promise<SignInUser> {
+    try {
+      return await this.prisma.getClient().user.create({
+        data: {
+          email: identity.email,
+          emailVerifiedAt: identity.emailVerified ? new Date() : null,
+          firstName: identity.firstName,
+          lastName: identity.lastName,
+          avatarUrl: identity.avatarUrl,
+          // Deliberately no `passwordHash`: the account has no password until one is set on purpose, and
+          // a placeholder hash would be a password nobody chose.
+          accounts: {
+            create: {
+              provider: 'GOOGLE',
+              providerAccountId: identity.providerAccountId,
+              scope: GOOGLE_SCOPE,
+            },
+          },
+        },
+        select: SIGN_IN_USER_FIELDS,
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) {
+        throw error;
+      }
+
+      // The race resolved itself in the other request. Re-resolving finds the row it created, and goes
+      // down the linking path rather than creating a second account for the same person.
+      return this.resolveGoogleUser(identity);
+    }
   }
 
   /** Opens the session and records the sign-in, as the last step shared by both login paths. */

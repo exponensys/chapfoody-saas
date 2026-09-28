@@ -15,12 +15,24 @@ import type { Request, Response } from 'express';
 import { AppException } from '../../common/errors/app.exception.js';
 import type { ApiEnv } from '../../config/env.js';
 import { API_ENV } from '../../config/env.token.js';
+import { secretsMatch } from '../../infra/crypto/secret-box.js';
 import { CurrentUser, Public } from './auth.decorators.js';
 import { AuthService } from './auth.service.js';
 import type { AuthPrincipal } from './auth.types.js';
 import { LoginDto } from './dto/login.dto.js';
 import { MfaCodeDto, MfaVerifyDto } from './dto/mfa.dto.js';
 import { MfaService } from './mfa.service.js';
+import {
+  MFA_CHALLENGE_COOKIE,
+  mfaChallengeCookieOptions,
+  readMfaChallengeCookie,
+} from './mfa-challenge-cookie.js';
+import {
+  OAUTH_STATE_COOKIE,
+  newOAuthState,
+  oauthStateCookieOptions,
+  readOAuthState,
+} from './google-state.js';
 import {
   readRefreshCookie,
   refreshCookieName,
@@ -187,6 +199,118 @@ export class AuthController {
     return this.auth.me(principal.userId, principal.businessId);
   }
 
+  // ── Google OAuth ────────────────────────────────────────────────────────────
+
+  /**
+   * Starts the Google flow.
+   *
+   * The state is generated here, stored in a cookie, and sent to Google in the URL. The callback
+   * compares the two — see `google-state.ts` for what that prevents. It is the only thing standing
+   * between this endpoint and a login-CSRF that signs a victim into an attacker's account.
+   */
+  @Public()
+  @Get('google')
+  @ApiOperation({
+    summary: 'Start Google sign-in',
+    description: 'Sets the anti-CSRF state cookie and redirects to the Google consent screen.',
+  })
+  startGoogle(@Res() response: Response): void {
+    const state = newOAuthState();
+
+    response.cookie(OAUTH_STATE_COOKIE, state, oauthStateCookieOptions(this.env, true));
+    response.redirect(HttpStatus.FOUND, this.auth.googleAuthorizationUrl(state));
+  }
+
+  /**
+   * Where Google returns the browser.
+   *
+   * ── Every failure ends in a redirect, not a JSON error ───────────────────────
+   * This is a browser navigation, so a `401` would show the user a page of JSON. Each failure gets a
+   * distinct `status` on the way back to the app, and none of them can produce a session — which is the
+   * property that matters, and it is not weakened by being reported politely.
+   *
+   * ── No credential ever travels in the URL ───────────────────────────────────
+   * The refresh token goes into its `httpOnly` cookie; an MFA challenge goes into a cookie of its own.
+   * The redirect carries a status word and nothing else, so nothing sensitive lands in browser history,
+   * session restore, or a `Referer` header.
+   */
+  @Public()
+  @Get('google/callback')
+  @ApiOperation({
+    summary: 'Google OAuth callback',
+    description: 'Verifies the state, exchanges the code, then redirects to the app with a status.',
+  })
+  async googleCallback(@Req() request: Request, @Res() response: Response): Promise<void> {
+    const query = request.query as Record<string, string | undefined>;
+    const expectedState = readOAuthState(request.headers.cookie);
+
+    // Cleared on EVERY path, including success: the state is single-use, so replaying this URL after a
+    // completed sign-in must find nothing left to match.
+    response.clearCookie(OAUTH_STATE_COOKIE, oauthStateCookieOptions(this.env, false));
+
+    const back = (status: string): void => {
+      response.redirect(HttpStatus.FOUND, `${this.env.frontendUrl}/auth/callback?status=${status}`);
+    };
+
+    if (query['error'] !== undefined) {
+      // The user pressed Cancel, or Google declined. Not worth an error status: the app shows a note and
+      // the sign-in button again.
+      back('denied');
+      return;
+    }
+
+    const code = query['code'];
+    const state = query['state'];
+
+    if (
+      code === undefined ||
+      state === undefined ||
+      expectedState === undefined ||
+      // Constant time: a mismatch is a security event, and comparing with `===` would leak how much of a
+      // guess was right.
+      !secretsMatch(expectedState, state)
+    ) {
+      back('invalid_state');
+      return;
+    }
+
+    try {
+      const identity = await this.auth.exchangeGoogleCode(code);
+
+      const outcome = await this.auth.loginWithGoogle(identity, {
+        ipAddress: request.ip,
+        userAgent: request.headers['user-agent'],
+      });
+
+      if (outcome.kind === 'mfa_required') {
+        // The second factor is owed. The challenge rides in a cookie rather than the URL, and
+        // `/auth/mfa/verify` accepts it from there.
+        response.cookie(
+          MFA_CHALLENGE_COOKIE,
+          outcome.challengeToken,
+          mfaChallengeCookieOptions(this.env, true),
+        );
+
+        back('mfa_required');
+        return;
+      }
+
+      response.cookie(
+        refreshCookieName(this.env),
+        outcome.tokens.refreshToken,
+        refreshCookieOptions(this.env, true),
+      );
+
+      // `status=ok` only means the refresh cookie was set. The app then calls POST /auth/refresh to get
+      // an access token, which keeps the token out of the redirect entirely.
+      back('ok');
+    } catch {
+      // A refused code, a forged ID token, a refused link, a suspended account: the app gets one status
+      // and shows a message that does not distinguish them.
+      back('failed');
+    }
+  }
+
   // ── MFA ─────────────────────────────────────────────────────────────────────
 
   /**
@@ -207,12 +331,24 @@ export class AuthController {
     @Req() request: Request,
     @Res({ passthrough: true }) response: Response,
   ): Promise<SessionResponseBody> {
+    // From the body for a password sign-in, or from the cookie for a Google one — where there was never
+    // a request body to put it in. Both are the same token, issued by the same code.
+    const challengeToken = dto.challengeToken ?? readMfaChallengeCookie(request.headers.cookie);
+
+    if (challengeToken === undefined) {
+      throw AppException.unauthenticated('Vérification MFA expirée. Reconnectez-vous.');
+    }
+
     const outcome = await this.auth.verifyMfa({
-      challengeToken: dto.challengeToken,
+      challengeToken,
       code: dto.code,
       ipAddress: request.ip,
       userAgent: request.headers['user-agent'],
     });
+
+    // The challenge is single-use; clearing it here means a second attempt has to start from a sign-in
+    // rather than replaying the same five-minute window.
+    response.clearCookie(MFA_CHALLENGE_COOKIE, mfaChallengeCookieOptions(this.env, false));
 
     // `verifyMfa` re-checks the account, so this is a session in every case that gets here.
     if (outcome.kind !== 'session') {
