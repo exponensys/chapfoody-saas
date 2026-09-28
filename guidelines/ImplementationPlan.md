@@ -754,7 +754,7 @@ change without a migration is forbidden by review.
 
 ### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
 
-**Progress** — six slices done, all tested.
+**Progress** — seven slices done, all tested.
 
 *Configuration* (35 tests, now 53 including the blocks that were missing — see the note at the end).
 Signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer, the MFA secret-box key and
@@ -834,6 +834,35 @@ the callback is a cross-site top-level navigation from `accounts.google.com`: a 
 be missing at the callback and every Google sign-in would fail with a "state mismatch" that looks exactly
 like an attack.
 
+*Registration, the password policy and the breach check* (24 policy/breach tests + 24 at the service) — the
+policy follows **NIST SP 800-63B rather than the rules everybody reaches for**: twelve characters minimum,
+every character allowed, and **no composition rules**. Requiring an uppercase letter, a digit and a symbol
+reliably produces `Password1!`, which narrows the passwords people choose rather than widening them. What
+replaces it is length plus a **blocklist**, which is the thing that actually catches `Password1!`.
+
+The blocklist check is **k-anonymity against HaveIBeenPwned**: the password is hashed and only the first
+**five** hex characters are sent, so the service learns nothing and the match happens locally. SHA-1 is
+used as an index into a public corpus, not as a security primitive — the one place in this codebase where
+it is the right tool, which is worth saying rather than leaving it to look like a mistake. The check
+**fails open**: if HIBP is slow or down the password is accepted and a warning logged, because a third
+party's outage must not stop the product signing anybody up, and the blocklist is defence in depth on top
+of a twelve-character minimum rather than the thing holding the door shut.
+
+Registration **never reveals whether an address is already registered** — same status, same empty body —
+and, because response *time* is just as good an oracle as a message, the Argon2 hash and the breach lookup
+happen on the duplicate path too and are then discarded. `202 Accepted` rather than `201 Created`, since
+201 would be a lie half the time and a distinguishable one.
+
+The password-change flow requires the current password **even with a valid session** (a session is a bearer
+credential, and a borrowed laptop must not be two requests away from locking the owner out), applies the
+same policy, and **signs every other session out** — the usual reason somebody changes a password is that
+they believe somebody else knows it, and leaving the other devices signed in would mean the change
+achieved nothing against exactly that person. `Session.revokedReason` already documented `password_change`
+as a value, so this completes the design rather than inventing a convention. E-mail verification uses the
+`VerificationToken` model with a keyed, purpose-namespaced hash — so a token minted to verify an address
+can never be presented as one that resets a password. Delivery is a `debug` log for now: the email service
+through BullMQ is a later slice, and logging keeps the flow walkable locally instead of a dead end.
+
 **Findings worth recording** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS, so it
 failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11. `otplib@13` fails the same
 way for a subtler reason: its `main` is CJS, but a transitive plugin resolves to TypeScript source under
@@ -852,8 +881,8 @@ updating the file for the MFA key, not by a failing test — worth noting, becau
 could have caught an assertion that was never made.
 
 **Still to do in M3** — throttling (`@nestjs/throttler`), the audit interceptor, the email service through
-BullMQ, the session-listing endpoints, registration with the password policy and breached-password check,
-and step-up verification for sensitive endpoints (the challenge mechanism exists and is reused for
+BullMQ (which is what turns the verification log line into a real link), the session-listing endpoints, and
+step-up verification for sensitive endpoints (the challenge mechanism exists and is reused for
 `mfa/disable`, which already demands a current code).
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
@@ -862,9 +891,9 @@ and step-up verification for sensitive endpoints (the challenge mechanism exists
 
 **Tâches**
 1. Email + password with **Argon2id**; password policy and breached-password check; `mustChangePassword` flow.
-   `[~]` Sign-in is done — Argon2id verification, a dummy hash for unknown e-mails so response time is not
-   an enumeration oracle, and `mustChangePassword` surfaced to the client. Registration and the
-   breached-password check are not written yet, so this task is not closed.
+   `[x]` Sign-in, registration, e-mail verification and the password-change flow are done. The policy is
+   NIST SP 800-63B rather than composition rules: length plus a blocklist, no "one uppercase, one digit",
+   because those rules produce `Password1!` and the blocklist is what actually catches it.
 2. **Google OAuth** through `/auth/callback` with `Account` linking; account-linking and email-collision rules
    documented.
    `[x]` Done, and the collision rule is the part that matters: an existing account is linked only when it
