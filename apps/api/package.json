@@ -20,6 +20,8 @@
     "openapi:export": "tsc -p tsconfig.build.json && node --env-file-if-exists=.env.local dist/scripts/export-openapi.js",
     "db:generate": "prisma generate",
     "db:validate": "prisma validate",
+    "db:seed": "prisma db seed",
+    "db:reset": "node scripts/db-reset.mjs",
     "prebuild": "prisma generate",
     "pretypecheck": "prisma generate",
     "pretest": "prisma generate",

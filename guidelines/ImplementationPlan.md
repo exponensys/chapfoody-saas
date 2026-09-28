@@ -661,8 +661,10 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
    migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
    There was never a `db push` script to remove.
-6. Generate and commit the ERD into `docs/`, kept current by a CI check. `[ ]` Deferred until the schema is complete:
-   an ERD of a third of the domains is a diagram that has to be redrawn, not a deliverable.
+6. Generate and commit the ERD into `docs/`, kept current by a CI check. `[ ]` The schema is now complete (135
+   tables across 15 domain groups), so this is the last open item in M2. It was deferred on the correct reasoning
+   that an ERD of a third of the domains is a diagram that has to be redrawn rather than a deliverable — that
+   reasoning no longer applies.
 7. Delete the Supabase/Hono KV stub and the unused `@jsr/supabase__supabase-js` dependency (ADR follow-up 4). `[x]`
    Already gone with M0: no active manifest or source file references Supabase, Hono or `@jsr`. The dependency
    survives only inside the frozen `legacy/` snapshot, where it must.
@@ -670,13 +672,26 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 **Livrables** — migrations applied to the Neon dev branch, seeded data, ERD, RLS proof tests.
 
 **Definition of Done** — `pnpm db:reset && pnpm db:seed` reproduces a fully working dataset from scratch on a clean
-branch, and the RLS proof tests pass. `[~]` The Neon database `chapfoody_saas` now has all three migrations deployed
-and isolation verified in place (`prisma/sql/verify-rls.mjs`: 23 tables, 11 tenant references, 20 policies, RLS
-enabled and forced, application role `NOBYPASSRLS`, fail-closed with no tenant context). Two gaps remain: the
-database rebuild has not been executed as such — Prisma refuses `migrate reset` as a destructive action and requires
-explicit human consent, which is the right default for a database that also holds production credentials, so it is
-unverified on the local instance too — and the `db:reset` / `db:seed` aliases are not yet defined in
-`apps/api/package.json`, so that exact command cannot run as written.
+branch, and the RLS proof tests pass. `[x]` Executed on 2026-09-27 against the local instance, from the repository
+root, exactly as written. `db:reset` dropped the schema and **replayed all 33 migrations from empty** — which is the
+stronger property and the one that matters, because a migration that only works on an already-migrated database is
+exactly the defect that broke the second database this schema was deployed to. The build then re-provisioned
+`chapfoody_app` (`NOSUPERUSER NOBYPASSRLS`) and `db:seed` populated every domain in a single cold pass: 7 businesses,
+14 customers, 7 storefronts with 21 pages, 3 categories and 4 articles of content, 7 loyalty programmes with 21
+ledger movements, 7 campaigns and 7 integrations. The rebuilt database then reported 135 tables / 109 tenant
+references / 154 policies / 0 unprotected, and all 16 isolation tests passed.
+
+Three things are worth recording about getting there. **The aliases did not exist**, which is why the command could
+not run as written before. **`db:reset` is a script, not `prisma migrate reset --force`**: the plan's own reasoning
+is that Prisma refuses a destructive reset without explicit human consent, and putting `--force` in package.json
+would delete that safety property for everyone to save one prompt. Instead the consent is encoded — the script
+refuses unless BOTH `DIRECT_URL` and `DATABASE_URL` are local, with no override flag, because an override flag is a
+prompt with extra steps and the failure mode is a dropped production schema. Verified by pointing it at the Neon
+branch: it refused and named both hosts. **`migrate reset` is not used at all**, for two reasons found by trying it:
+Prisma 7 removed `--skip-seed`, so the reset cannot be told not to seed — and if it seeds, it seeds as the
+application role against a schema whose grants do not exist yet, failing in a way that looks like an RLS bug; and
+`DROP SCHEMA public CASCADE` followed by `migrate deploy` is deterministic and proves replay-from-empty on every
+rebuild rather than only on a fresh branch.
 
 **Tests (TDD)** — integration only: (a) with business A's context, no query can read business B's rows; `[x]`
 (b) unique constraints behave per tenant; `[x]` (c) the seed is idempotent when run twice; `[x]` (d) all eight accounts
