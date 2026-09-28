@@ -752,7 +752,15 @@ change without a migration is forbidden by review.
 
 ---
 
-### M3 — Authentication, MFA, tenant and entitlement guards `[ ]`
+### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
+
+**Progress** — the configuration foundation is in place and tested (`src/config/env.ts` +
+`auth-env.spec.ts`): signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer and the
+Google OAuth settings are all validated at boot, with 35 tests over them and their failure modes. The
+milestone marker moved from `M1` to `M3` (`M1` had been stale since M2 landed). The data layer needs
+nothing: M2 already models `Session` (with revocation reasons), `RefreshToken` (`tokenHash` + `familyId`
++ `replacedById`, which is exactly the shape reuse detection needs), `Account`, `MfaSecret`,
+`RecoveryCode` and `VerificationToken`, and `User` already carries `failedLoginAttempts` / `lockedUntil`.
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 

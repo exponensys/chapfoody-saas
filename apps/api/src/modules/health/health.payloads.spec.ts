@@ -28,7 +28,10 @@ describe('buildLivenessPayload', () => {
   });
 
   it('reports the running milestone, so a deployment can be identified from a probe', () => {
-    expect(buildLivenessPayload().milestone).toBe('M1');
+    // Asserted against the constant rather than a literal: the test's intent is that the payload
+    // REPORTS the running milestone, and hardcoding the value meant every milestone bump broke a probe
+    // test that had nothing to do with the change.
+    expect(buildLivenessPayload().milestone).toBe(CURRENT_MILESTONE);
   });
 });
 

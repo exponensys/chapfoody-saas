@@ -1,5 +1,18 @@
 import { DEFAULT_CORS_ORIGINS, DEFAULT_PORT, loadEnv } from './env.js';
 
+/**
+ * The minimum a production environment needs beyond DATABASE_URL.
+ *
+ * Since M3 the API refuses to boot in production without two distinct, sufficiently long signing
+ * secrets: a development default that reached production would let anybody mint a token for anybody,
+ * and it is exactly the kind of mistake that looks fine in a diff. These tests therefore have to
+ * provide them — which is the requirement making itself visible rather than a detail of the tests.
+ */
+const PRODUCTION_SECRETS = {
+  JWT_ACCESS_SECRET: 'a'.repeat(40),
+  JWT_REFRESH_SECRET: 'b'.repeat(40),
+} as const;
+
 describe('loadEnv defaults', () => {
   it('boots on a fresh clone with no environment at all', () => {
     expect(loadEnv({})).toEqual({
@@ -10,6 +23,14 @@ describe('loadEnv defaults', () => {
       corsOrigins: DEFAULT_CORS_ORIGINS,
       logLevel: 'debug',
       swaggerEnabled: true,
+      // Asserted by shape rather than by value: the authentication block has its own suite
+      // (auth-env.spec.ts), and duplicating it here would mean two places to update and one of them
+      // forgotten. `objectContaining` still catches an unexpected TOP-LEVEL field, which is what this
+      // assertion is for.
+      auth: expect.objectContaining({
+        accessTtlSeconds: 900,
+        refreshTtlSeconds: 2_592_000,
+      }),
     });
   });
 
@@ -70,6 +91,7 @@ describe('loadEnv validation', () => {
     const env = loadEnv({
       NODE_ENV: 'production',
       DATABASE_URL: 'postgresql://user:pw@ep-x-pooler.eu-central-1.aws.neon.tech/chapfoody',
+      ...PRODUCTION_SECRETS,
     });
 
     expect(env.nodeEnv).toBe('production');
@@ -92,7 +114,10 @@ describe('loadEnv derived settings', () => {
   it('picks a log level per environment', () => {
     expect(loadEnv({ NODE_ENV: 'development' }).logLevel).toBe('debug');
     expect(loadEnv({ NODE_ENV: 'test' }).logLevel).toBe('silent');
-    expect(loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x' }).logLevel).toBe('info');
+    expect(
+      loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x', ...PRODUCTION_SECRETS })
+        .logLevel,
+    ).toBe('info');
   });
 
   it('honours an explicit log level and rejects an unknown one', () => {
@@ -102,15 +127,20 @@ describe('loadEnv derived settings', () => {
 
   it('serves Swagger everywhere except production', () => {
     expect(loadEnv({ NODE_ENV: 'development' }).swaggerEnabled).toBe(true);
-    expect(loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x' }).swaggerEnabled).toBe(
-      false,
-    );
+    expect(
+      loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x', ...PRODUCTION_SECRETS })
+        .swaggerEnabled,
+    ).toBe(false);
   });
 
   it('allows Swagger to be forced on or off explicitly', () => {
     expect(
-      loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x', SWAGGER_ENABLED: 'TRUE' })
-        .swaggerEnabled,
+      loadEnv({
+        NODE_ENV: 'production',
+        DATABASE_URL: 'postgresql://x',
+        SWAGGER_ENABLED: 'TRUE',
+        ...PRODUCTION_SECRETS,
+      }).swaggerEnabled,
     ).toBe(true);
     expect(loadEnv({ SWAGGER_ENABLED: 'false' }).swaggerEnabled).toBe(false);
   });

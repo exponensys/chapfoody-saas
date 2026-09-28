@@ -1,5 +1,6 @@
 import type { ApiEnv } from '../src/config/env.js';
 import { PrismaService } from '../src/infra/prisma/prisma.service.js';
+import { makeTestEnv } from './helpers/test-env.js';
 
 /**
  * Real PostgreSQL round trip.
@@ -25,15 +26,7 @@ if (databaseUrl === undefined) {
 }
 
 function makeEnv(url: string): ApiEnv {
-  return {
-    nodeEnv: 'test',
-    port: 4000,
-    databaseUrl: url,
-    redisUrl: undefined,
-    corsOrigins: [],
-    logLevel: 'silent',
-    swaggerEnabled: false,
-  };
+  return makeTestEnv({ databaseUrl: url });
 }
 
 describeWhenConfigured('PrismaService against a real PostgreSQL (integration)', () => {

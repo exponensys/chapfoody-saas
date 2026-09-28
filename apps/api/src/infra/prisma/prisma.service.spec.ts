@@ -1,20 +1,6 @@
 import { AppException } from '../../common/errors/app.exception.js';
-import type { ApiEnv } from '../../config/env.js';
 import { PrismaService } from './prisma.service.js';
-
-/** A complete environment, so each test only states what it is actually varying. */
-function makeEnv(overrides: Partial<ApiEnv> = {}): ApiEnv {
-  return {
-    nodeEnv: 'test',
-    port: 4000,
-    databaseUrl: undefined,
-    redisUrl: undefined,
-    corsOrigins: [],
-    logLevel: 'silent',
-    swaggerEnabled: false,
-    ...overrides,
-  };
-}
+import { makeTestEnv as makeEnv } from '../../../test/helpers/test-env.js';
 
 describe('PrismaService', () => {
   it('reports not configured when DATABASE_URL is absent', () => {

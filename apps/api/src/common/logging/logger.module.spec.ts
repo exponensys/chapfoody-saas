@@ -47,8 +47,16 @@ describe('buildPinoHttpOptions', () => {
       target: 'pino-pretty',
     });
     expect(
-      buildPinoHttpOptions(loadEnv({ NODE_ENV: 'production', DATABASE_URL: 'postgresql://x' }))
-        ?.transport,
+      buildPinoHttpOptions(
+        loadEnv({
+          NODE_ENV: 'production',
+          DATABASE_URL: 'postgresql://x',
+          // Production refuses to boot without two distinct signing secrets since M3, so a test that
+          // wants a production environment has to be a realistic one.
+          JWT_ACCESS_SECRET: 'a'.repeat(40),
+          JWT_REFRESH_SECRET: 'b'.repeat(40),
+        }),
+      )?.transport,
     ).toBeUndefined();
   });
 
@@ -56,7 +64,7 @@ describe('buildPinoHttpOptions', () => {
     const options = buildPinoHttpOptions(loadEnv({}));
     const customProps = options?.customProps as () => Record<string, unknown>;
 
-    expect(customProps()).toEqual({ service: 'chapfoody-api', milestone: 'M1' });
+    expect(customProps()).toEqual({ service: 'chapfoody-api', milestone: 'M3' });
   });
 });
 
