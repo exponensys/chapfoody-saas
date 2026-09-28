@@ -46,6 +46,14 @@ export function configureApp(
 
   app.use(requestIdMiddleware);
 
+  // Behind a proxy, `req.ip` is the proxy's address unless Express is told to trust the forwarding
+  // header — and the rate limiter counts by client. Without this, every request appears to come from the
+  // load balancer, so the limit becomes global and one busy client locks out everybody. Set for
+  // production only: trusting the header locally would let anybody spoof their own address.
+  if (env.nodeEnv === 'production') {
+    app.getHttpAdapter().getInstance().set('trust proxy', 1);
+  }
+
   app.enableCors({
     origin: env.corsOrigins,
     // Required for the httpOnly refresh cookie introduced in M3.

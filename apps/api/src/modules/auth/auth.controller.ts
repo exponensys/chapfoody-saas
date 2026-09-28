@@ -10,6 +10,7 @@ import {
   Res,
 } from '@nestjs/common';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 
 import { AppException } from '../../common/errors/app.exception.js';
@@ -19,6 +20,13 @@ import { secretsMatch } from '../../infra/crypto/secret-box.js';
 import { CurrentUser, Public } from './auth.decorators.js';
 import { AuthService } from './auth.service.js';
 import type { AuthPrincipal } from './auth.types.js';
+import {
+  LOGIN_THROTTLE,
+  MFA_THROTTLE,
+  REFRESH_THROTTLE,
+  REGISTER_THROTTLE,
+  VERIFY_EMAIL_THROTTLE,
+} from '../throttling/throttling.module.js';
 import { LoginDto } from './dto/login.dto.js';
 import { MfaCodeDto, MfaVerifyDto } from './dto/mfa.dto.js';
 import {
@@ -101,6 +109,7 @@ export class AuthController {
   ) {}
 
   @Public()
+  @Throttle(LOGIN_THROTTLE)
   @Post('login')
   // 200, not the default 201: nothing is created at a stable URL, and a 201 with no Location header
   // makes clients and proxies guess.
@@ -146,6 +155,7 @@ export class AuthController {
   }
 
   @Public()
+  @Throttle(REFRESH_THROTTLE)
   @Post('refresh')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
@@ -218,6 +228,7 @@ export class AuthController {
    * it; the app signs in afterwards.
    */
   @Public()
+  @Throttle(REGISTER_THROTTLE)
   @Post('register')
   @HttpCode(HttpStatus.ACCEPTED)
   @ApiOperation({
@@ -231,6 +242,7 @@ export class AuthController {
 
   /** Proves an e-mail address. Public: the caller has no session yet, and the token is the credential. */
   @Public()
+  @Throttle(VERIFY_EMAIL_THROTTLE)
   @Post('verify-email')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Verify an e-mail address', description: 'Consumes the token from the link.' })
@@ -270,6 +282,7 @@ export class AuthController {
    * between this endpoint and a login-CSRF that signs a victim into an attacker's account.
    */
   @Public()
+  @Throttle(LOGIN_THROTTLE)
   @Get('google')
   @ApiOperation({
     summary: 'Start Google sign-in',
@@ -381,6 +394,7 @@ export class AuthController {
    * after a correct password. It is the only place a challenge token is accepted.
    */
   @Public()
+  @Throttle(MFA_THROTTLE)
   @Post('mfa/verify')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({

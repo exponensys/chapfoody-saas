@@ -8,6 +8,7 @@ import { QueueModule } from './infra/queue/queue.module.js';
 import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { MetaModule } from './modules/meta/meta.module.js';
+import { ThrottlingModule } from './modules/throttling/throttling.module.js';
 
 /**
  * The environment is read once here because the logger and the queue need their
@@ -32,6 +33,11 @@ const env = loadEnv();
     // `withProcessors: false` — the API never consumes jobs. Processing belongs to
     // the worker entrypoint so that traffic and job throughput scale separately.
     QueueModule.forRoot(env, { withProcessors: false }),
+    // Registered BEFORE AuthModule, and that order is load-bearing: global guards run in registration
+    // order, so the rate limiter sees a request before the authentication guards do any work on it. The
+    // point of a limiter is to reject a flood BEFORE the expensive part — an Argon2 verify, a database
+    // round trip — not after it.
+    ThrottlingModule,
     // Registers the global `JwtAuthGuard`, so every controller added from here on is protected by
     // default and has to opt out with `@Public()`.
     AuthModule,
