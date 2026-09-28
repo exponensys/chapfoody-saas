@@ -1,14 +1,17 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { AppException } from '../../common/errors/app.exception.js';
+import { ERROR_CODES } from '../../common/errors/error-codes.js';
 import type { ApiEnv } from '../../config/env.js';
 import { API_ENV } from '../../config/env.token.js';
 import { hashPassword, verifyPassword } from '../../infra/crypto/password.js';
 import { PrismaService } from '../../infra/prisma/prisma.service.js';
 import { runAsTenant } from '../../infra/prisma/tenant-context.js';
-import { MfaService } from './mfa.service.js';
+import { BreachedPasswordService } from './breached-password.service.js';
 import type { GoogleIdentity } from './google-oauth.service.js';
 import { GoogleOAuthService } from './google-oauth.service.js';
+import { MfaService } from './mfa.service.js';
+import { checkPasswordPolicy } from './password-policy.js';
 import { MFA_CHALLENGE_TTL_SECONDS, TokenService, type IssuedTokens } from './token.service.js';
 
 export interface AuthenticatedUser {
@@ -74,6 +77,15 @@ function isUniqueViolation(error: unknown): boolean {
 const GOOGLE_SCOPE = 'openid email profile';
 
 /**
+ * How long a verification link stays usable.
+ *
+ * A day, not an hour: the link arrives in an inbox somebody may not open until the evening, and a policy
+ * that expires before it can be used teaches people to ignore verification mails. It is single-use, so
+ * the window is the only thing at risk, and the address was unverified until then anyway.
+ */
+const VERIFY_EMAIL_TTL_SECONDS = 24 * 60 * 60;
+
+/**
  * The user fields a session needs, plus the ones that decide whether one may be opened at all.
  *
  * One constant rather than the same ten-line `select` written out on every sign-in path, which is how a
@@ -121,7 +133,10 @@ export class AuthService {
     private readonly tokens: TokenService,
     private readonly mfa: MfaService,
     private readonly google: GoogleOAuthService,
+    private readonly breached: BreachedPasswordService,
   ) {}
+
+  private readonly logger = new Logger(AuthService.name);
 
   async login(input: {
     email: string;
@@ -572,6 +587,212 @@ export class AuthService {
     }
 
     return { ...user, activeBusinessId };
+  }
+
+  /**
+   * Creates an account from an e-mail and a password.
+   *
+   * ── The response never says whether the address was already registered ───────
+   * An existing address produces exactly what a new one produces: no error, no body, no way to tell.
+   * Otherwise the sign-up form becomes a free account-enumeration oracle, which is the same reasoning
+   * that makes every login failure a single 401 — and doing it in one place while not the other would be
+   * a hole with a lock on it.
+   *
+   * ── Which is why the password is hashed even when nothing is created ─────────
+   * Returning early on an existing address would make those requests finish in microseconds while a real
+   * registration spends the Argon2 cost. Response TIME is just as good an oracle as a message, so the
+   * hash is computed in both cases and thrown away in one. This is the same defence as the dummy hash on
+   * the login path.
+   */
+  async register(input: {
+    email: string;
+    password: string;
+    firstName: string;
+    lastName: string;
+  }): Promise<void> {
+    const client = this.prisma.getClient();
+
+    // Normalised here because the column is documented as always lower-cased, and that is what makes its
+    // unique index genuinely case-insensitive.
+    const email = input.email.trim().toLowerCase();
+
+    await this.assertAcceptablePassword(input.password, {
+      email,
+      firstName: input.firstName,
+      lastName: input.lastName,
+    });
+
+    // Computed before the existence check, so both paths pay it.
+    const passwordHash = await hashPassword(input.password);
+
+    const existing = await client.user.findUnique({ where: { email }, select: { id: true } });
+
+    if (existing !== null) {
+      return;
+    }
+
+    let created: { id: string };
+
+    try {
+      created = await client.user.create({
+        data: {
+          email,
+          passwordHash,
+          firstName: input.firstName,
+          lastName: input.lastName,
+          // Null until the address is proven. It is what the Google linking rule reads, so a
+          // freshly-registered account can never be the target of a silent sign-in merge.
+          emailVerifiedAt: null,
+        },
+        select: { id: true },
+      });
+    } catch (error) {
+      // Two sign-ups raced for the same address. The other one won, and what the caller sees must be
+      // identical either way.
+      if (isUniqueViolation(error)) {
+        return;
+      }
+
+      throw error;
+    }
+
+    await this.sendVerificationEmail(created.id, email);
+  }
+
+  /**
+   * Proves the e-mail address behind a verification link.
+   *
+   * One message for every failure — unknown, expired, already used — because telling them apart lets
+   * somebody walk the token space and learn which links were ever real.
+   */
+  async verifyEmail(rawToken: string): Promise<void> {
+    const userId = await this.tokens.consumeVerificationToken(rawToken, 'EMAIL_VERIFY');
+
+    if (userId === null) {
+      throw new AppException(
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+        'Ce lien de vérification est invalide ou a expiré.',
+      );
+    }
+
+    await this.prisma.getClient().user.update({
+      where: { id: userId },
+      data: { emailVerifiedAt: new Date() },
+    });
+  }
+
+  /**
+   * Changes the password of the signed-in user.
+   *
+   * ── Why the current password is still required with a valid session ──────────
+   * A session is a bearer credential. Asking for the current password is what stops somebody who has
+   * borrowed an unlocked laptop — or stolen a session token — from locking the owner out of their own
+   * account in two requests.
+   *
+   * ── Everything else is signed out ───────────────────────────────────────────
+   * The usual reason somebody changes a password is that they believe somebody else knows it. Leaving the
+   * other devices signed in would mean the change achieved nothing against exactly the person they were
+   * worried about. The session making the request is kept: it just proved it knows the new password.
+   */
+  async changePassword(
+    userId: string,
+    sessionId: string,
+    input: { currentPassword?: string | undefined; newPassword: string },
+  ): Promise<void> {
+    const client = this.prisma.getClient();
+
+    const user = await client.user.findUnique({
+      where: { id: userId },
+      select: { email: true, firstName: true, lastName: true, passwordHash: true },
+    });
+
+    if (user === null) {
+      throw AppException.unauthenticated('Authentification requise.');
+    }
+
+    // An account created through Google has no password to confirm. A signed-in session plus the new
+    // password is enough to SET one — which is how somebody who signed up with Google adds a password.
+    if (user.passwordHash !== null) {
+      const matches =
+        input.currentPassword !== undefined &&
+        (await verifyPassword(user.passwordHash, input.currentPassword));
+
+      if (!matches) {
+        throw AppException.unauthenticated('Mot de passe actuel incorrect.');
+      }
+    }
+
+    await this.assertAcceptablePassword(
+      input.newPassword,
+      { email: user.email, firstName: user.firstName, lastName: user.lastName },
+      'newPassword',
+    );
+
+    await client.user.update({
+      where: { id: userId },
+      data: {
+        passwordHash: await hashPassword(input.newPassword),
+        // The rotation that was being demanded has now happened.
+        mustChangePassword: false,
+        // Any lockout was about the OLD password, and keeping it would lock somebody out for a secret
+        // they no longer use.
+        failedLoginAttempts: 0,
+        lockedUntil: null,
+      },
+    });
+
+    await this.tokens.revokeOtherSessions(userId, sessionId, 'password_change');
+  }
+
+  /**
+   * Refuses a password the policy rejects, or one known to be breached.
+   *
+   * The error details match the validation pipe's shape — a field name mapped to a list of reasons — so a
+   * client renders a policy failure exactly like a DTO failure instead of needing two paths. The MESSAGE
+   * is the policy's own text, because unlike a DTO failure this one can say something useful.
+   */
+  private async assertAcceptablePassword(
+    password: string,
+    context: { email?: string | undefined; firstName?: string | undefined; lastName?: string | undefined },
+    field: 'password' | 'newPassword' = 'password',
+  ): Promise<void> {
+    const problem = checkPasswordPolicy(password, context);
+
+    if (problem !== null) {
+      throw new AppException(400, ERROR_CODES.VALIDATION_FAILED, problem, {
+        [field]: ['passwordPolicy'],
+      });
+    }
+
+    if (await this.breached.isBreached(password)) {
+      throw new AppException(
+        400,
+        ERROR_CODES.VALIDATION_FAILED,
+        'Ce mot de passe apparaît dans des fuites de données connues. Choisissez-en un autre.',
+        { [field]: ['breachedPassword'] },
+      );
+    }
+  }
+
+  /**
+   * Hands the verification link to the delivery mechanism.
+   *
+   * There is no delivery mechanism yet — the email service through BullMQ is the next slice — so the link
+   * is logged at `debug`, which is the development default. That makes the flow walkable end to end
+   * locally rather than a dead end, and it is deliberately `debug` rather than `info` so the token cannot
+   * reach production logs by accident.
+   */
+  private async sendVerificationEmail(userId: string, email: string): Promise<void> {
+    const token = await this.tokens.createVerificationToken(
+      userId,
+      'EMAIL_VERIFY',
+      VERIFY_EMAIL_TTL_SECONDS,
+    );
+
+    this.logger.debug(
+      `Verification link for ${email}: ${this.env.frontendUrl}/verifier-email?token=${token}`,
+    );
   }
 
   /**

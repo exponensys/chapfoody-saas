@@ -3,6 +3,7 @@ import { PrismaService } from '../../infra/prisma/prisma.service.js';
 import { makeTestEnv } from '../../../test/helpers/test-env.js';
 import type { ApiEnv } from '../../config/env.js';
 import { AuthService } from './auth.service.js';
+import type { BreachedPasswordService } from './breached-password.service.js';
 import type { GoogleOAuthService } from './google-oauth.service.js';
 import type { MfaService } from './mfa.service.js';
 import type { TokenService } from './token.service.js';
@@ -38,9 +39,13 @@ describe('AuthService — MFA gating', () => {
     signMfaChallenge: jest.Mock;
     verifyMfaChallenge: jest.Mock;
     revokeSession: jest.Mock;
+    revokeOtherSessions: jest.Mock;
+    createVerificationToken: jest.Mock;
+    consumeVerificationToken: jest.Mock;
   };
   let mfa: { isEnabled: jest.Mock; verifyForUser: jest.Mock };
   let google: { authorizationUrl: jest.Mock; exchangeCode: jest.Mock };
+  let breached: { isBreached: jest.Mock };
   let service: AuthService;
   let passwordHash: string;
 
@@ -85,11 +90,18 @@ describe('AuthService — MFA gating', () => {
       signMfaChallenge: jest.fn().mockResolvedValue('challenge.token'),
       verifyMfaChallenge: jest.fn().mockResolvedValue('user-1'),
       revokeSession: jest.fn().mockResolvedValue(undefined),
+      revokeOtherSessions: jest.fn().mockResolvedValue(undefined),
+      createVerificationToken: jest.fn().mockResolvedValue('the-verification-token'),
+      consumeVerificationToken: jest.fn().mockResolvedValue(null),
     };
 
     mfa = { isEnabled: jest.fn().mockResolvedValue(false), verifyForUser: jest.fn() };
 
     google = { authorizationUrl: jest.fn(), exchangeCode: jest.fn() };
+
+    // Passwords are assumed unbreached unless a test says otherwise: the real service reaches the network,
+    // and no unit test should depend on a third party being up.
+    breached = { isBreached: jest.fn().mockResolvedValue(false) };
 
     service = new AuthService(
       env,
@@ -97,6 +109,7 @@ describe('AuthService — MFA gating', () => {
       tokens as unknown as TokenService,
       mfa as unknown as MfaService,
       google as unknown as GoogleOAuthService,
+      breached as unknown as BreachedPasswordService,
     );
   });
 
@@ -322,6 +335,203 @@ describe('AuthService — MFA gating', () => {
       const outcome = await login();
 
       expect(outcome.kind).toBe('session');
+    });
+  });
+
+  describe('register', () => {
+    const register = (overrides: Record<string, unknown> = {}) =>
+      service.register({
+        email: 'new@email.com',
+        password: 'une phrase de passe correcte',
+        firstName: 'Awa',
+        lastName: 'Diallo',
+        ...overrides,
+      } as { email: string; password: string; firstName: string; lastName: string });
+
+    it('stores a HASH, never the password itself', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue({ id: 'user-1' });
+
+      await register();
+
+      const created = client.user.create.mock.calls[0][0].data;
+
+      expect(created.passwordHash).not.toBe('une phrase de passe correcte');
+      expect(created.passwordHash).toMatch(/^\$argon2id\$/);
+    });
+
+    it('leaves the address UNVERIFIED, so the Google linking rule can trust it later', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue({ id: 'user-1' });
+
+      await register();
+
+      // The same trick as an attacker pre-registering somebody else's address, so the flag starts false.
+      expect(client.user.create.mock.calls[0][0].data.emailVerifiedAt).toBeNull();
+    });
+
+    it('normalises the address, which is what makes the unique index case-insensitive', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue({ id: 'user-1' });
+
+      await register({ email: '  New@Email.COM ' });
+
+      expect(client.user.findUnique.mock.calls[0][0].where.email).toBe('new@email.com');
+    });
+
+    it('does nothing visible when the address is ALREADY registered', async () => {
+      // The enumeration defence: no error, no different status, no body.
+      client.user.findUnique.mockResolvedValue({ id: 'existing' });
+
+      await expect(register()).resolves.toBeUndefined();
+      expect(client.user.create).not.toHaveBeenCalled();
+    });
+
+    it('still does the expensive work for a duplicate, so timing does not leak', async () => {
+      // Returning early would make duplicate sign-ups finish in microseconds against a real
+      // registration's Argon2 cost, and response time is as good an oracle as a message.
+      client.user.findUnique.mockResolvedValue({ id: 'existing' });
+
+      await register();
+
+      expect(breached.isBreached).toHaveBeenCalled();
+    });
+
+    it('does not send a second verification mail to an existing address', async () => {
+      // Otherwise the form becomes a way to mail-bomb somebody who never asked.
+      client.user.findUnique.mockResolvedValue({ id: 'existing' });
+
+      await register();
+
+      expect(tokens.createVerificationToken).not.toHaveBeenCalled();
+    });
+
+    it('sends a verification link for a new account', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockResolvedValue({ id: 'user-1' });
+
+      await register();
+
+      expect(tokens.createVerificationToken).toHaveBeenCalledWith(
+        'user-1',
+        'EMAIL_VERIFY',
+        expect.any(Number),
+      );
+    });
+
+    it('refuses a password the policy rejects, with a message that says what to change', async () => {
+      await expect(register({ password: 'court' })).rejects.toThrow(/au moins 12 caractères/);
+      expect(client.user.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a breached password', async () => {
+      breached.isBreached.mockResolvedValue(true);
+
+      await expect(register()).rejects.toThrow(/fuites de données connues/);
+      expect(client.user.create).not.toHaveBeenCalled();
+    });
+
+    it('answers a race on the same address exactly like a duplicate', async () => {
+      client.user.findUnique.mockResolvedValue(null);
+      client.user.create.mockRejectedValue(Object.assign(new Error('unique'), { code: 'P2002' }));
+
+      await expect(register()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('verifyEmail', () => {
+    it('marks the address verified when the token is good', async () => {
+      tokens.consumeVerificationToken.mockResolvedValue('user-1');
+
+      await service.verifyEmail('the-token');
+
+      expect(client.user.update).toHaveBeenCalledWith({
+        where: { id: 'user-1' },
+        data: { emailVerifiedAt: expect.any(Date) },
+      });
+    });
+
+    it('gives ONE message for unknown, expired and already-used tokens', async () => {
+      // Distinguishing them would let somebody walk the token space and learn which links were ever real.
+      tokens.consumeVerificationToken.mockResolvedValue(null);
+
+      await expect(service.verifyEmail('a-guess')).rejects.toThrow(/invalide ou a expiré/);
+      expect(client.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('changePassword', () => {
+    const change = (input: Record<string, unknown> = {}) =>
+      service.changePassword('user-1', 'session-1', {
+        currentPassword: password,
+        newPassword: 'une nouvelle phrase de passe',
+        ...input,
+      } as { currentPassword?: string; newPassword: string });
+
+    beforeEach(async () => {
+      client.user.findUnique.mockResolvedValue({
+        email: 'resto@email.com',
+        firstName: 'Awa',
+        lastName: 'Diallo',
+        passwordHash: await hashPassword(password),
+      });
+    });
+
+    it('requires the CURRENT password, even with a valid session', async () => {
+      // A session is a bearer credential; without this, a borrowed laptop is a full account takeover.
+      await expect(change({ currentPassword: 'wrong' })).rejects.toThrow(/actuel incorrect/);
+      expect(client.user.update).not.toHaveBeenCalled();
+    });
+
+    it('refuses when no current password is supplied at all', async () => {
+      await expect(change({ currentPassword: undefined })).rejects.toThrow(/actuel incorrect/);
+    });
+
+    it('stores the new hash and clears mustChangePassword', async () => {
+      await change();
+
+      const update = client.user.update.mock.calls[0][0].data;
+
+      expect(update.passwordHash).toMatch(/^\$argon2id\$/);
+      // The rotation that was being demanded has now happened.
+      expect(update.mustChangePassword).toBe(false);
+      // A lockout was about the OLD password.
+      expect(update.lockedUntil).toBeNull();
+      expect(update.failedLoginAttempts).toBe(0);
+    });
+
+    it('signs every OTHER session out, but not the one making the request', async () => {
+      // The usual reason somebody changes a password is that they think somebody else knows it.
+      await change();
+
+      expect(tokens.revokeOtherSessions).toHaveBeenCalledWith(
+        'user-1',
+        'session-1',
+        'password_change',
+      );
+    });
+
+    it('lets a Google-only account SET a password without confirming one', async () => {
+      // There is no current password to prove, and the session is what authorises the change.
+      client.user.findUnique.mockResolvedValue({
+        email: 'resto@email.com',
+        firstName: 'Awa',
+        lastName: 'Diallo',
+        passwordHash: null,
+      });
+
+      await expect(change({ currentPassword: undefined })).resolves.toBeUndefined();
+      expect(client.user.update).toHaveBeenCalled();
+    });
+
+    it('applies the policy to the new password', async () => {
+      await expect(change({ newPassword: 'court' })).rejects.toThrow(/au moins 12 caractères/);
+    });
+
+    it('refuses a new password that is breached', async () => {
+      breached.isBreached.mockResolvedValue(true);
+
+      await expect(change()).rejects.toThrow(/fuites de données connues/);
     });
   });
 });

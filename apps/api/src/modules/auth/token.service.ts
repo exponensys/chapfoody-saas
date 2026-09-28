@@ -320,6 +320,124 @@ export class TokenService {
     ]);
   }
 
+  /**
+   * Signs out every session for a user except the one making the request.
+   *
+   * Used after a password change: the usual reason somebody changes their password is that they believe
+   * it is known to somebody else, and leaving the other devices signed in would mean the change achieved
+   * nothing against the person they were worried about. The current session is kept deliberately — the
+   * person who just proved they know the new password should not be thrown out of the page they are on.
+   *
+   * `Session.revokedReason` documents 'password_change' as one of its values, so this is completing the
+   * design rather than inventing a convention.
+   */
+  async revokeOtherSessions(
+    userId: string,
+    keepSessionId: string,
+    reason: string,
+  ): Promise<void> {
+    const client = this.prisma.getClient();
+    const now = new Date();
+
+    const others = await client.session.findMany({
+      where: { userId, id: { not: keepSessionId }, revokedAt: null },
+      select: { id: true },
+    });
+
+    const sessionIds = others.map((session) => session.id);
+
+    if (sessionIds.length === 0) {
+      return;
+    }
+
+    await client.$transaction([
+      client.refreshToken.updateMany({
+        where: { sessionId: { in: sessionIds }, revokedAt: null },
+        data: { revokedAt: now, revokedReason: reason },
+      }),
+      client.session.updateMany({
+        where: { id: { in: sessionIds }, revokedAt: null },
+        data: { revokedAt: now, revokedReason: reason },
+      }),
+    ]);
+  }
+
+  /**
+   * The stored hash of a single-use verification token.
+   *
+   * Keyed, like the refresh token, so a database dump is not enough to check a guessed token offline —
+   * and namespaced by purpose, so a token minted to verify an e-mail can never be presented as one that
+   * resets a password. The schema permits one row per purpose, and this is what keeps the purposes apart
+   * even though they share a column.
+   */
+  hashVerificationToken(rawToken: string, purpose: string): string {
+    return createHmac('sha256', this.env.auth.refreshSecret)
+      .update(`${purpose}:${rawToken}`)
+      .digest('hex');
+  }
+
+  /**
+   * Mints a single-use verification token and stores only its hash.
+   *
+   * The raw value is returned so the caller can put it in an email — the one moment it exists. Nothing
+   * can read it back afterwards, which is the property that makes a leaked database useless: an attacker
+   * cannot verify an address or reset a password with a table dump alone.
+   */
+  async createVerificationToken(
+    userId: string,
+    purpose: 'EMAIL_VERIFY' | 'PASSWORD_RESET' | 'MFA_RESET' | 'INVITATION',
+    ttlSeconds: number,
+  ): Promise<string> {
+    const rawToken = randomBytes(32).toString('base64url');
+
+    await this.prisma.getClient().verificationToken.create({
+      data: {
+        userId,
+        purpose,
+        tokenHash: this.hashVerificationToken(rawToken, purpose),
+        expiresAt: new Date(Date.now() + ttlSeconds * 1000),
+      },
+    });
+
+    return rawToken;
+  }
+
+  /**
+   * Consumes a verification token, returning the user it belongs to.
+   *
+   * Returns `null` rather than throwing for every failure — unknown, expired, already used, wrong
+   * purpose — because the caller must not be able to tell them apart. The `consumedAt: null` in the
+   * update's WHERE clause is what makes it single-use under a race: two simultaneous requests both see
+   * the row, and only one update matches it.
+   */
+  async consumeVerificationToken(
+    rawToken: string,
+    purpose: 'EMAIL_VERIFY' | 'PASSWORD_RESET' | 'MFA_RESET' | 'INVITATION',
+  ): Promise<string | null> {
+    const client = this.prisma.getClient();
+
+    const stored = await client.verificationToken.findUnique({
+      where: { tokenHash: this.hashVerificationToken(rawToken, purpose) },
+      select: { id: true, userId: true, purpose: true, expiresAt: true, consumedAt: true },
+    });
+
+    if (
+      stored === null ||
+      stored.purpose !== purpose ||
+      stored.consumedAt !== null ||
+      stored.expiresAt.getTime() <= Date.now()
+    ) {
+      return null;
+    }
+
+    const consumed = await client.verificationToken.updateMany({
+      where: { id: stored.id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+
+    return consumed.count === 1 ? stored.userId : null;
+  }
+
   private refreshExpiry(): Date {
     return new Date(Date.now() + this.env.auth.refreshTtlSeconds * 1000);
   }

@@ -21,6 +21,11 @@ import { AuthService } from './auth.service.js';
 import type { AuthPrincipal } from './auth.types.js';
 import { LoginDto } from './dto/login.dto.js';
 import { MfaCodeDto, MfaVerifyDto } from './dto/mfa.dto.js';
+import {
+  ChangePasswordDto,
+  RegisterDto,
+  VerifyEmailDto,
+} from './dto/register.dto.js';
 import { MfaService } from './mfa.service.js';
 import {
   MFA_CHALLENGE_COOKIE,
@@ -197,6 +202,62 @@ export class AuthController {
   @ApiOperation({ summary: 'The authenticated caller' })
   me(@CurrentUser() principal: AuthPrincipal): Promise<unknown> {
     return this.auth.me(principal.userId, principal.businessId);
+  }
+
+  // ── Registration ────────────────────────────────────────────────────────────
+
+  /**
+   * Creates an account.
+   *
+   * ── Why 202 and an empty body ───────────────────────────────────────────────
+   * `201 Created` would be a lie half the time and, worse, a distinguishable one: the sign-up form would
+   * become a free "is this address registered?" service. The response is identical whether the address was
+   * new or already taken, so 202 — "accepted" — is the only status that is true in both cases.
+   *
+   * No session is opened. The address has not been proven yet, and the verification link is what proves
+   * it; the app signs in afterwards.
+   */
+  @Public()
+  @Post('register')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiOperation({
+    summary: 'Create an account',
+    description:
+      'Sends a verification link. The response is identical whether or not the address was already registered.',
+  })
+  async register(@Body() dto: RegisterDto): Promise<void> {
+    await this.auth.register(dto);
+  }
+
+  /** Proves an e-mail address. Public: the caller has no session yet, and the token is the credential. */
+  @Public()
+  @Post('verify-email')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Verify an e-mail address', description: 'Consumes the token from the link.' })
+  async verifyEmail(@Body() dto: VerifyEmailDto): Promise<void> {
+    await this.auth.verifyEmail(dto.token);
+  }
+
+  /**
+   * Changes the caller's password.
+   *
+   * Guarded rather than public: it acts on the account behind the session, and the service re-checks the
+   * current password on top — a valid session alone must not be enough to lock the owner out.
+   */
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Change the password of the authenticated caller',
+    description: 'Signs every other session out. Omits the current password only for accounts with none.',
+  })
+  async changePassword(
+    @CurrentUser() principal: AuthPrincipal,
+    @Body() dto: ChangePasswordDto,
+  ): Promise<void> {
+    await this.auth.changePassword(principal.userId, principal.sessionId, {
+      currentPassword: dto.currentPassword,
+      newPassword: dto.newPassword,
+    });
   }
 
   // ── Google OAuth ────────────────────────────────────────────────────────────

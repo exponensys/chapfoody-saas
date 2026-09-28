@@ -1,6 +1,297 @@
 {
   "openapi": "3.0.0",
   "paths": {
+    "/v1/auth/login": {
+      "post": {
+        "description": "Returns an access token and sets the httpOnly refresh cookie.",
+        "operationId": "AuthController_login",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Sign in with e-mail and password",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "description": "Rotates the refresh token. Replaying a spent token revokes the whole token family.",
+        "operationId": "AuthController_refresh",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Exchange the refresh cookie for a new access token",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "operationId": "AuthController_logout",
+        "parameters": [],
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "End the current session",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/me": {
+      "get": {
+        "operationId": "AuthController_me",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "The authenticated caller",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/register": {
+      "post": {
+        "description": "Sends a verification link. The response is identical whether or not the address was already registered.",
+        "operationId": "AuthController_register",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": ""
+          }
+        },
+        "summary": "Create an account",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/verify-email": {
+      "post": {
+        "description": "Consumes the token from the link.",
+        "operationId": "AuthController_verifyEmail",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyEmailDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "Verify an e-mail address",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/change-password": {
+      "post": {
+        "description": "Signs every other session out. Omits the current password only for accounts with none.",
+        "operationId": "AuthController_changePassword",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangePasswordDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "Change the password of the authenticated caller",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/google": {
+      "get": {
+        "description": "Sets the anti-CSRF state cookie and redirects to the Google consent screen.",
+        "operationId": "AuthController_startGoogle",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Start Google sign-in",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/google/callback": {
+      "get": {
+        "description": "Verifies the state, exchanges the code, then redirects to the app with a status.",
+        "operationId": "AuthController_googleCallback",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Google OAuth callback",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/mfa/verify": {
+      "post": {
+        "description": "Exchanges a challenge token and a TOTP or recovery code for a session.",
+        "operationId": "AuthController_verifyMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaVerifyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Complete a sign-in that requires a second factor",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/mfa/enroll": {
+      "post": {
+        "description": "Returns the secret and otpauth URI. Not active until confirmed with a code.",
+        "operationId": "AuthController_enrollMfa",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Begin TOTP enrolment",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/mfa/confirm": {
+      "post": {
+        "description": "Activates MFA and returns the recovery codes. These are shown once, and never again.",
+        "operationId": "AuthController_confirmMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Confirm TOTP enrolment",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/mfa/disable": {
+      "post": {
+        "description": "Requires a current code from the device.",
+        "operationId": "AuthController_disableMfa",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaCodeDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          }
+        },
+        "summary": "Turn MFA off",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/v1/auth/mfa/status": {
+      "get": {
+        "operationId": "AuthController_mfaStatus",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "The MFA state of the authenticated caller",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/health": {
       "get": {
         "description": "Reports that the process is running. Performs no dependency check.",
@@ -91,6 +382,109 @@
         "type": "http"
       }
     },
-    "schemas": {}
+    "schemas": {
+      "LoginDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "restaurant@email.com"
+          },
+          "password": {
+            "type": "string",
+            "example": "Resto123#@!$"
+          }
+        },
+        "required": [
+          "email",
+          "password"
+        ]
+      },
+      "RegisterDto": {
+        "type": "object",
+        "properties": {
+          "email": {
+            "type": "string",
+            "example": "restaurant@email.com"
+          },
+          "password": {
+            "type": "string",
+            "example": "une phrase de passe correcte"
+          },
+          "firstName": {
+            "type": "string",
+            "example": "Awa"
+          },
+          "lastName": {
+            "type": "string",
+            "example": "Diallo"
+          }
+        },
+        "required": [
+          "email",
+          "password",
+          "firstName",
+          "lastName"
+        ]
+      },
+      "VerifyEmailDto": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "The token from the verification e-mail."
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "ChangePasswordDto": {
+        "type": "object",
+        "properties": {
+          "currentPassword": {
+            "type": "string",
+            "example": "Resto123#@!$"
+          },
+          "newPassword": {
+            "type": "string",
+            "example": "une nouvelle phrase de passe"
+          }
+        },
+        "required": [
+          "newPassword"
+        ]
+      },
+      "MfaVerifyDto": {
+        "type": "object",
+        "properties": {
+          "challengeToken": {
+            "type": "string",
+            "description": "The challenge token from a login that reported mfaRequired. Cookie-based flow may omit it."
+          },
+          "code": {
+            "type": "string",
+            "example": "123456",
+            "description": "A six-digit code, or a recovery code."
+          }
+        },
+        "required": [
+          "code"
+        ]
+      },
+      "MfaCodeDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "123456",
+            "description": "The six-digit code from the authenticator app."
+          }
+        },
+        "required": [
+          "code"
+        ]
+      }
+    }
   }
 }
