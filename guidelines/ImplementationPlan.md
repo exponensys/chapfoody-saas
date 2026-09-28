@@ -754,47 +754,32 @@ change without a migration is forbidden by review.
 
 ### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
 
-**Progress** — two slices done, both tested.
+**Progress** — five slices done, all tested.
 
-*Configuration* (`src/config/env.ts` + `auth-env.spec.ts`, 35 tests). Signing secrets, token lifetimes,
-cookie policy, lockout policy, MFA issuer and the Google OAuth settings are validated at boot. The rules
-worth naming: production requires two **explicit, distinct, 32+ character** secrets (a development
-default reaching production lets anybody mint a token for anybody, and the same secret in both variables
-silently removes the reason the refresh hash is keyed); the refresh lifetime must **exceed** the access
-lifetime (otherwise every session dies at the first refresh and it presents as intermittent logout);
-`Secure` defaults from the environment, because forcing it on breaks localhost over http and the failure
-looks like "login does nothing". `parseDurationSeconds` (9 tests) converts `15m`/`30d`, since `15m`
+*Configuration* (35 tests, now 53 including the blocks that were missing — see the note at the end).
+Signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer, the MFA secret-box key and
+the Google OAuth settings are validated at boot. The rules worth naming: production requires
+**explicit, distinct, 32+ character** secrets (a development default reaching production lets anybody
+mint a token for anybody, and the same secret in both variables silently removes the reason the refresh
+hash is keyed); the refresh lifetime must **exceed** the access lifetime (otherwise every session dies
+at the first refresh and it presents as intermittent logout); `Secure` defaults from the environment,
+because forcing it on breaks localhost over http and the failure looks like "login does nothing"; and
+`SameSite=None` is refused without `Secure`, since browsers reject that combination anyway and a config
+that cannot work should not start. `parseDurationSeconds` (9 tests) converts `15m`/`30d`, because `15m`
 parsed as 15 *seconds* would lock everybody out.
 
-*Tokens and sessions* (`src/modules/auth/token.service.ts` + 12 unit tests). Access token is a stateless
-15-minute JWT; the refresh token is an **opaque 32-byte random string stored as a keyed HMAC-SHA256**,
-matching the `VarChar(64)` the schema sized for it. Rotation revokes before reissuing, in one
-transaction. **A replayed token revokes the whole family** — the signature of a stolen token, and a
-deliberate trade against the case where a double-submitted request trips it. Expiry and explicit
-revocation are *not* theft and leave the family alone, which is asserted, because getting that backwards
-would sign a user's other devices out for no reason.
+*Tokens and sessions* (12 tests) — Access token is a stateless 15-minute JWT; the refresh token is an
+**opaque 32-byte random string stored as a keyed HMAC-SHA256**, matching the `VarChar(64)` the schema
+sized for it. Rotation revokes before reissuing, in one transaction. **A replayed token revokes the
+whole family** — the signature of a stolen token, and a deliberate trade against the case where a
+double-submitted request trips it. Expiry and explicit revocation are *not* theft and leave the family
+alone, which is asserted, because getting that backwards would sign a user's other devices out for no
+reason.
 
 The data layer needed nothing: M2 already models `Session` (with revocation reasons), `RefreshToken`
 (`tokenHash` + `familyId` + `replacedById` — exactly the shape reuse detection needs), `Account`,
 `MfaSecret`, `RecoveryCode` and `VerificationToken`, and `User` carries `failedLoginAttempts` /
 `lockedUntil`. `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
-
-**Still to do in M3** — password login and the `/auth/*` endpoints `[x]` (login, refresh, logout, me);
-the four guards `[x]` (`JwtAuthGuard`, `TenantGuard`, `RolesGuard`, `EntitlementGuard` with
-`@RequiresFeature`); lockout enforcement `[x]` (in login). Remaining: MFA TOTP enrolment and step-up,
-Google OAuth with account linking, throttling (`@nestjs/throttler`), the audit interceptor, the email
-service through BullMQ, and the session-listing endpoints.
-
-**Four slices done, all tested.**
-
-*Configuration* (35 tests) — secrets, lifetimes, cookie policy, lockout policy, MFA issuer, OAuth
-settings, all validated at boot. `parseDurationSeconds` (9 tests) converts `15m`/`30d`, since `15m`
-parsed as 15 *seconds* would lock everybody out.
-
-*Tokens and sessions* (12 tests) — stateless 15-minute JWT access token; an OPAQUE 32-byte refresh token
-stored as a keyed HMAC-SHA256. Rotation revokes before reissuing, in one transaction. **A replayed token
-revokes the whole family**; expiry and explicit revocation are not theft and leave it alone, which is
-asserted.
 
 *Login and the `/auth/*` endpoints* (12 guard + 11 cookie tests) — every failure is the same 401 except
 lockout; an unknown e-mail still spends a full Argon2id verify against a throwaway hash, because
@@ -810,9 +795,41 @@ business has paid for. Entitlement is checked against `Entitlement` rows rather 
 `expiresAt` is evaluated at check time so a lapsed trial closes itself, and an unknown feature key
 refuses rather than allowing.
 
-**Two compatibility/design findings** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs
-CommonJS, so it failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11.
-And `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
+*MFA TOTP* (27 service tests + 9 at the login path) — the DoD stated as one sentence, "an account with
+MFA enabled cannot obtain a token without the TOTP step", asserted **negatively**: `login` on an MFA
+account returns a challenge and no session and no token, the refresh cookie is set inside the session
+branch rather than before it, and no sign-in is recorded until the second factor arrives. Enrolment is
+**two-phase** — `beginEnrolment` stores an encrypted, unconfirmed secret that protects nothing until a
+code proves the authenticator holds it, so a user who scans the QR and closes the tab is not stuck
+between two secrets. The secret is **sealed with AES-256-GCM** under a key from the environment rather
+than hashed: verifying a code means recomputing it, so the secret must be readable, and a dump of the
+table alone must not be enough to generate anybody's codes. `MFA_ENCRYPTION_KEY` is now required in
+production for that reason. Ten recovery codes are returned **once** and stored as Argon2id hashes, since
+they are ten working bypasses of the second factor. Codes are validated by walking the time steps with
+the code pinned per step, which yields the matched step and with it the **replay check** — a spent code is
+refused inside its own window, which a plain "is this valid now" answer cannot do.
+
+**Findings worth recording** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS, so it
+failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11. `otplib@13` fails the same
+way for a subtler reason: its `main` is CJS, but a transitive plugin resolves to TypeScript source under
+`require`, which Jest cannot load — plain Node was fine, so this would have failed only in tests. Pinned to
+v12, the mature CJS major. Its TOTP API also proved less usable than it looks: `checkDelta` reads the
+secret from instance options that `clone()` does not carry (and throws when it is missing), and a
+hand-derived HOTP counter does not reproduce the codes it generates. Pinning the epoch through the options
+does work, which is why the replay check walks steps explicitly instead of trusting a helper.
+
+**A correction to the earlier record** — the Configuration slice was reported as "17 further tests over
+the block's rules and failure modes", and `auth-env.spec.ts` was in fact 99 lines with eight tests: the
+cookie-policy, lockout and MFA assertions had been drafted and then never written. They are written now
+(cookie `Secure`/`SameSite` combinations, the lockout policy, and the production requirement for
+`MFA_ENCRYPTION_KEY`), which is why that slice's count went from 35 to 53. The gap was found while
+updating the file for the MFA key, not by a failing test — worth noting, because nothing in the suite
+could have caught an assertion that was never made.
+
+**Still to do in M3** — Google OAuth with account linking, throttling (`@nestjs/throttler`), the audit
+interceptor, the email service through BullMQ, the session-listing endpoints, and step-up verification for
+sensitive endpoints (the challenge mechanism exists and is reused for `mfa/disable`, which already demands
+a current code).
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 
@@ -820,12 +837,19 @@ And `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
 
 **Tâches**
 1. Email + password with **Argon2id**; password policy and breached-password check; `mustChangePassword` flow.
+   `[~]` Sign-in is done — Argon2id verification, a dummy hash for unknown e-mails so response time is not
+   an enumeration oracle, and `mustChangePassword` surfaced to the client. Registration and the
+   breached-password check are not written yet, so this task is not closed.
 2. **Google OAuth** through `/auth/callback` with `Account` linking; account-linking and email-collision rules
    documented.
 3. JWT access token (short TTL) + **httpOnly rotating refresh** cookie; refresh reuse detection revokes the token
    family.
 4. **MFA TOTP** (`otplib`) with QR provisioning and 10 single-use recovery codes; step-up verification for sensitive
    endpoints.
+   `[~]` Enrolment, confirmation, 10 single-use recovery codes, the login challenge, replay protection and
+   `mfa/disable` requiring a current code are all done and tested. The `otpauth://` URI is returned for the
+   client to render as a QR rather than a server-rendered image, which avoids an image dependency and is
+   what every authenticator expects. General step-up for arbitrary sensitive endpoints is still to do.
 5. Guards: `JwtAuthGuard`, `RolesGuard` (RBAC), `TenantGuard`, **`EntitlementGuard`** with a
    `@RequiresFeature('marketing.campaigns')` decorator — the server is the only source of truth for premium access.
 6. Rate limiting (`@nestjs/throttler`, Redis-backed) and account lockout on the auth endpoints.
@@ -842,6 +866,11 @@ without the TOTP step; a request for a feature outside the subscription returns 
 
 **Tests (TDD)** — unit: token rotation, TOTP window tolerance, hashing, lockout counters. Integration: login → MFA
 challenge → token; refresh reuse revocation; cross-tenant `403`; entitlement `403`; role escalation refused.
+
+`[~]` The unit half exists: token rotation and reuse detection (12), TOTP tolerance and replay (27),
+Argon2id hashing, lockout counters and the config rules (53), the four guards (11) and the login path's MFA
+gating (9). The integration half still needs a database — `login → MFA challenge → token` is covered at the
+service level, but not yet end to end through HTTP against real rows.
 
 **Risques** — session complexity → concentrated in one module, cookie strategy documented, reviewed again in M14.
 
