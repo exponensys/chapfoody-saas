@@ -31,6 +31,22 @@ export class AppException extends HttpException {
   }
 
   /**
+   * 401 — no valid credentials, or credentials that no longer work.
+   *
+   * Deliberately one code for "wrong password", "expired token" and "revoked session": the caller
+   * learns that they are not signed in and nothing more. Distinguishing them would tell an attacker
+   * which half of a guess was right.
+   */
+  static unauthenticated(message: string, details?: unknown): AppException {
+    return new AppException(HttpStatus.UNAUTHORIZED, ERROR_CODES.UNAUTHENTICATED, message, details);
+  }
+
+  /** 403 — authenticated, and not allowed. */
+  static forbidden(message: string, details?: unknown): AppException {
+    return new AppException(HttpStatus.FORBIDDEN, ERROR_CODES.FORBIDDEN, message, details);
+  }
+
+  /**
    * 503 — a dependency is unavailable.
    * Used by the health probes when the database or the queue cannot be reached.
    */
