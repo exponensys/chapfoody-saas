@@ -7,6 +7,7 @@ import type {
   HealthResponseBody,
 } from '../../common/errors/error-response.js';
 import type { RequestWithId } from '../../common/http/request-id.js';
+import { Public } from '../auth/auth.decorators.js';
 import { buildLivenessPayload } from './health.payloads.js';
 import { HealthService } from './health.service.js';
 
@@ -26,8 +27,13 @@ import { HealthService } from './health.service.js';
  * `not-configured` only ever appears in development and tests.
  *
  * All three are excluded from the global `/v1` prefix (see main.ts).
+ *
+ * `@Public()` because a probe that needs a token cannot answer the question it is
+ * asked: an orchestrator has no credentials, and a liveness check that fails
+ * while the process is healthy would restart it.
  */
 @ApiTags('health')
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(private readonly health: HealthService) {}

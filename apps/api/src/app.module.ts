@@ -5,6 +5,7 @@ import { ConfigModule } from './config/config.module.js';
 import { loadEnv } from './config/env.js';
 import { PrismaModule } from './infra/prisma/prisma.module.js';
 import { QueueModule } from './infra/queue/queue.module.js';
+import { AuthModule } from './modules/auth/auth.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { MetaModule } from './modules/meta/meta.module.js';
 
@@ -31,6 +32,9 @@ const env = loadEnv();
     // `withProcessors: false` — the API never consumes jobs. Processing belongs to
     // the worker entrypoint so that traffic and job throughput scale separately.
     QueueModule.forRoot(env, { withProcessors: false }),
+    // Registers the global `JwtAuthGuard`, so every controller added from here on is protected by
+    // default and has to opt out with `@Public()`.
+    AuthModule,
     HealthModule,
     MetaModule,
   ],

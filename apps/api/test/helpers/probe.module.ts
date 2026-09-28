@@ -1,16 +1,24 @@
 import { Body, Controller, Get, Module, Post } from '@nestjs/common';
 import { IsEmail, IsInt, Min } from 'class-validator';
 
+import { Public } from '../../src/modules/auth/auth.decorators.js';
+
 /**
  * Test-only probe controller.
  *
- * M1 ships no DTO-bearing endpoint of its own (authentication arrives in M3), so the
- * global ValidationPipe and the unhandled-error branch of the exception filter would
- * otherwise be unprovable end to end.
+ * M1 shipped no DTO-bearing endpoint of its own, so the global ValidationPipe and the
+ * unhandled-error branch of the exception filter would otherwise be unprovable end to
+ * end. M3 now has a DTO-bearing endpoint of its own (`POST /auth/login`), but this
+ * controller still earns its place for `/probe/boom`: the unhandled-error branch needs a
+ * route that throws on purpose, and nothing in the product should do that.
  *
  * Mounted on the **real** application through `createTestApp`, which applies the
  * production `configureApp` — so what these routes exercise is the same global pipe,
  * filter and prefix that production uses, not a lookalike.
+ *
+ * `@Public()` because the global `JwtAuthGuard` would otherwise answer 401 before the
+ * pipe or the filter ever ran — which is exactly what happened the moment the guard was
+ * registered, and what these suites caught.
  */
 export class ProbeDto {
   @IsEmail()
@@ -21,6 +29,7 @@ export class ProbeDto {
   quantity!: number;
 }
 
+@Public()
 @Controller('probe')
 export class ProbeController {
   @Post()

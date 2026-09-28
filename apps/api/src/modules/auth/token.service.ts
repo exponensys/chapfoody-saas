@@ -17,6 +17,14 @@ export interface SessionOwner {
 
 export interface IssuedTokens {
   sessionId: string;
+  /**
+   * The user the session belongs to.
+   *
+   * Returned rather than looked up again: the caller almost always needs it immediately (to build a
+   * response body), and re-reading it by session id would be a second query for something the rotation
+   * already had in hand.
+   */
+  userId: string;
   /** The RAW refresh token. Only ever returned to the caller; the database holds a keyed hash. */
   refreshToken: string;
   accessToken: string;
@@ -116,6 +124,7 @@ export class TokenService {
 
     return {
       sessionId: session.id,
+      userId: owner.userId,
       refreshToken,
       accessToken: await this.signAccessToken({
         userId: owner.userId,
@@ -205,6 +214,7 @@ export class TokenService {
 
     return {
       sessionId: stored.sessionId,
+      userId: stored.session.userId,
       refreshToken: nextToken,
       accessToken: await this.signAccessToken({
         userId: stored.session.userId,
