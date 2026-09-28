@@ -754,13 +754,39 @@ change without a migration is forbidden by review.
 
 ### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
 
-**Progress** — the configuration foundation is in place and tested (`src/config/env.ts` +
-`auth-env.spec.ts`): signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer and the
-Google OAuth settings are all validated at boot, with 35 tests over them and their failure modes. The
-milestone marker moved from `M1` to `M3` (`M1` had been stale since M2 landed). The data layer needs
-nothing: M2 already models `Session` (with revocation reasons), `RefreshToken` (`tokenHash` + `familyId`
-+ `replacedById`, which is exactly the shape reuse detection needs), `Account`, `MfaSecret`,
-`RecoveryCode` and `VerificationToken`, and `User` already carries `failedLoginAttempts` / `lockedUntil`.
+**Progress** — two slices done, both tested.
+
+*Configuration* (`src/config/env.ts` + `auth-env.spec.ts`, 35 tests). Signing secrets, token lifetimes,
+cookie policy, lockout policy, MFA issuer and the Google OAuth settings are validated at boot. The rules
+worth naming: production requires two **explicit, distinct, 32+ character** secrets (a development
+default reaching production lets anybody mint a token for anybody, and the same secret in both variables
+silently removes the reason the refresh hash is keyed); the refresh lifetime must **exceed** the access
+lifetime (otherwise every session dies at the first refresh and it presents as intermittent logout);
+`Secure` defaults from the environment, because forcing it on breaks localhost over http and the failure
+looks like "login does nothing". `parseDurationSeconds` (9 tests) converts `15m`/`30d`, since `15m`
+parsed as 15 *seconds* would lock everybody out.
+
+*Tokens and sessions* (`src/modules/auth/token.service.ts` + 12 unit tests). Access token is a stateless
+15-minute JWT; the refresh token is an **opaque 32-byte random string stored as a keyed HMAC-SHA256**,
+matching the `VarChar(64)` the schema sized for it. Rotation revokes before reissuing, in one
+transaction. **A replayed token revokes the whole family** — the signature of a stolen token, and a
+deliberate trade against the case where a double-submitted request trips it. Expiry and explicit
+revocation are *not* theft and leave the family alone, which is asserted, because getting that backwards
+would sign a user's other devices out for no reason.
+
+The data layer needed nothing: M2 already models `Session` (with revocation reasons), `RefreshToken`
+(`tokenHash` + `familyId` + `replacedById` — exactly the shape reuse detection needs), `Account`,
+`MfaSecret`, `RecoveryCode` and `VerificationToken`, and `User` carries `failedLoginAttempts` /
+`lockedUntil`. `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
+
+**Still to do in M3** — password login and the `/auth/*` endpoints, MFA TOTP enrolment and step-up,
+Google OAuth with account linking, the four guards (`JwtAuthGuard`, `RolesGuard`, `TenantGuard`,
+`EntitlementGuard` with `@RequiresFeature`), throttling and lockout enforcement, the audit interceptor,
+the email service through BullMQ, and the session-listing endpoints.
+
+**One compatibility finding** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS,
+so it failed to import outright. Pinned to `@nestjs/jwt@11`, which is CJS and pairs with NestJS 11,
+rather than loosening `transformIgnorePatterns` to paper over a version mismatch.
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 
