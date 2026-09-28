@@ -651,20 +651,25 @@ Recorded deviations from the model list in section 5.2, each deliberate:
 
 **Tâches**
 1. Write `prisma/schema.prisma` domain by domain — one PR per domain group, each carrying its own migration.
-   `[~]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). Nine groups done
-   (identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till with
-   payments and tax, and accounting); five to go.
-2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[~]`
-   Done for the tables that exist — 26 tenant references on the local database, 0 unprotected. Enforced for every
-   future table by three tests: the RLS-coverage query and the schema-vs-list check, plus `cf_apply_tenant_rls()`
+   `[x]` Split into `prisma/models/*.prisma` by domain (Prisma's multi-file schema). **All fifteen groups are
+   done**: identity/tenancy, subscription/premium, catalogue, stock, purchasing, front of house, sales, the till
+   with payments and tax, accounting, vendors, HR with payroll, delivery, affiliate, customers, storefront,
+   content, and marketing with integrations. 134 models across 29 schema files, 33 migrations, each domain
+   carrying both its tables and its RLS migration.
+2. Add `businessId` with indexes and tenant-inclusive unique constraints on every business-scoped table. `[x]`
+   **135 tables, 109 tenant references, 154 policies, 0 unprotected** on both the local instance and Neon. The
+   platform-content tables are the deliberate exception and the reason is recorded in their migration: they have
+   no tenant at all, so their policies answer a different question (published or not, admin or not). Enforced for
+   every future table by three tests — the RLS-coverage query, the schema-vs-list check, and `cf_apply_tenant_rls()`
    making the omission impossible in the first place.
 3. Enable RLS policies in a dedicated SQL migration; add the `SET LOCAL app.business_id` helper; implement the
-   Prisma `$extends` scoping and the `TenantGuard`. `[~]` RLS, the transaction-local helper (ADR-0001, follow-up 1)
-   and the scoping extension are done and tested. `TenantGuard` moves to M3, with the reason above.
+   Prisma `$extends` scoping and the `TenantGuard`. `[x]` RLS, the transaction-local helper (ADR-0001, follow-up 1)
+   and the scoping extension are done and tested; `TenantGuard` is M3 by design, with the reason above.
    A least-privilege database role (`NOSUPERUSER NOBYPASSRLS`) was added as well — without it PostgreSQL exempts
-   the application from every policy, so the isolation tests would have passed while proving nothing.
+   the application from every policy, so the isolation tests would have passed while proving nothing. Both
+   databases are verified to connect as that role.
 4. `prisma/seed.ts`: plans (Free / Standard / Premium), the `Feature` registry, the accounts of section 5.4, one
-   business per client account, and a demo catalog + stock + orders per business. `[~]` Plans, the 39-feature
+   business per client account, and a demo catalog + stock + orders per business. `[x]` Plans, the 39-feature
    registry, the 8 accounts, 7 businesses with memberships, subscriptions and resolved entitlements, a **demo
    catalogue** (17 categories, 32 products, ingredients, a recipe with its bill of materials, and a modifier group),
    **demo stock** (a default location per business, 19 stocked items, an opening ledger entry each, a supplier with
@@ -676,6 +681,23 @@ Recorded deviations from the model list in section 5.2, each deliberate:
    `PurchaseOrder`. Accounting is seeded as a chart of 8 accounts per business plus the posting of the settled sale:
    the entry is written as a draft, its lines added, and only then posted — the only order the policies allow. The
    tip is credited to a liability rather than to revenue, because it is money held for staff.
+
+   Every domain added since is seeded the same way, and the whole set now reproduces from an empty database in one
+   cold pass: **vendors** (7 sellers, 7 commission rules, 7 targets), **HR and payroll** (14 employees, 14
+   contracts, 7 shifts, 7 time entries, 7 payslips), **delivery** (7 drivers, 7 zones, 14 radius bands, 4
+   deliveries with 20 events and 8 earnings), **affiliate** (7 partners, 7 links, 7 referrals, 7 commissions, 7
+   payouts), **customers** (14 customers with addresses, notes and a consent ledger that deliberately holds BOTH a
+   grant and a withdrawal for the same channel and purpose), **storefront** (7 sites, 7 resolved themes, 21 pages,
+   28 navigation entries, 7 domains, 7 assets, 7 checkout rule sets), **content** (3 categories, 4 tags, 4 posts,
+   3 videos, a case study, 3 use cases, media and legal pages — written as the SUPER_ADMIN, because the write path
+   is admin-only), and **marketing with integrations** (a loyalty programme with 21 ledger movements, 21 rewards, 7
+   segments and audiences, 7 campaigns, 7 SMS sends, 14 automations, 7 integrations, 7 webhook deliveries, 14 jobs).
+
+   Two disciplines were applied to all of it and are worth carrying forward. **Denormalised numbers are reconciled
+   from their source, never invented**: the customer counters and the loyalty balance are computed by summing the
+   rows that explain them, so the demo satisfies the invariant instead of merely appearing to — and a test asserts
+   it. **A seed that skips does not converge**: skipping an existing row left a new foreign key null forever, so
+   the seeders now fill a null and leave a deliberate non-null alone.
 5. Wire `prisma migrate` into CI; remove `db push` from every script except local development. `[x]` CI applies
    migrations, verifies `migrate status`, creates the application role and seeds before running integration tests.
    There was never a `db push` script to remove.
