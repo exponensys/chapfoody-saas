@@ -779,14 +779,40 @@ The data layer needed nothing: M2 already models `Session` (with revocation reas
 `MfaSecret`, `RecoveryCode` and `VerificationToken`, and `User` carries `failedLoginAttempts` /
 `lockedUntil`. `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
 
-**Still to do in M3** — password login and the `/auth/*` endpoints, MFA TOTP enrolment and step-up,
-Google OAuth with account linking, the four guards (`JwtAuthGuard`, `RolesGuard`, `TenantGuard`,
-`EntitlementGuard` with `@RequiresFeature`), throttling and lockout enforcement, the audit interceptor,
-the email service through BullMQ, and the session-listing endpoints.
+**Still to do in M3** — password login and the `/auth/*` endpoints `[x]` (login, refresh, logout, me);
+the four guards `[x]` (`JwtAuthGuard`, `TenantGuard`, `RolesGuard`, `EntitlementGuard` with
+`@RequiresFeature`); lockout enforcement `[x]` (in login). Remaining: MFA TOTP enrolment and step-up,
+Google OAuth with account linking, throttling (`@nestjs/throttler`), the audit interceptor, the email
+service through BullMQ, and the session-listing endpoints.
 
-**One compatibility finding** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS,
-so it failed to import outright. Pinned to `@nestjs/jwt@11`, which is CJS and pairs with NestJS 11,
-rather than loosening `transformIgnorePatterns` to paper over a version mismatch.
+**Four slices done, all tested.**
+
+*Configuration* (35 tests) — secrets, lifetimes, cookie policy, lockout policy, MFA issuer, OAuth
+settings, all validated at boot. `parseDurationSeconds` (9 tests) converts `15m`/`30d`, since `15m`
+parsed as 15 *seconds* would lock everybody out.
+
+*Tokens and sessions* (12 tests) — stateless 15-minute JWT access token; an OPAQUE 32-byte refresh token
+stored as a keyed HMAC-SHA256. Rotation revokes before reissuing, in one transaction. **A replayed token
+revokes the whole family**; expiry and explicit revocation are not theft and leave it alone, which is
+asserted.
+
+*Login and the `/auth/*` endpoints* (12 guard + 11 cookie tests) — every failure is the same 401 except
+lockout; an unknown e-mail still spends a full Argon2id verify against a throwaway hash, because
+otherwise response time is a free account-enumeration oracle; the account is re-checked on every refresh,
+not only at login; the refresh token never appears in a response body; and the default business is read
+through `runAsTenant`, without which every session would silently be scoped to no business at all.
+
+*The four access guards* (11 tests) — registered globally in a fixed order (auth → tenant → role →
+entitlement), because each depends on the previous one's work. `TenantGuard` resolves the membership once
+and attaches it, so `RolesGuard` cannot disagree with it. `RolesGuard` exempts platform staff and
+`EntitlementGuard` does not — a super-admin belongs to no tenant, but entitlement is about what a
+business has paid for. Entitlement is checked against `Entitlement` rows rather than a plan name,
+`expiresAt` is evaluated at check time so a lapsed trial closes itself, and an unknown feature key
+refuses rather than allowing.
+
+**Two compatibility/design findings** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs
+CommonJS, so it failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11.
+And `CURRENT_MILESTONE` moved from `M1` (stale since M2 landed) to `M3`.
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 
