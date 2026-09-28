@@ -6,7 +6,10 @@ import type { ApiEnv } from '../../config/env.js';
 import { API_ENV } from '../../config/env.token.js';
 import { AuthController } from './auth.controller.js';
 import { AuthService } from './auth.service.js';
+import { EntitlementGuard } from './entitlement.guard.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { RolesGuard } from './roles.guard.js';
+import { TenantGuard } from './tenant.guard.js';
 import { TokenService } from './token.service.js';
 
 /**
@@ -44,10 +47,18 @@ import { TokenService } from './token.service.js';
   providers: [
     TokenService,
     AuthService,
+    // ORDER MATTERS. Nest runs global guards in registration order, and each one depends on the last:
+    // the token is verified, then the membership is resolved from the verified identity, then the role
+    // is read off that membership, and only then is the subscription consulted. Reversing any pair
+    // would mean a guard reasoning about an identity or a membership that has not been established.
     { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: TenantGuard },
+    { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: EntitlementGuard },
   ],
-  // Exported so later milestones can reuse the guard's principal and the session machinery rather
-  // than re-deriving either — `EntitlementGuard` and `TenantGuard` are built on top of these.
+  // Exported so later milestones can reuse the guards' work rather than re-deriving it: the principal,
+  // the membership, and the session machinery are all things a domain module should consume, not
+  // reimplement.
   exports: [TokenService, AuthService],
 })
 export class AuthModule {}

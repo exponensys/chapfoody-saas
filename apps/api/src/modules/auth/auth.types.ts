@@ -1,5 +1,7 @@
 import type { Request } from 'express';
 
+import type { TenantMembership } from './access.decorators.js';
+
 /**
  * What a valid access token asserts.
  *
@@ -26,7 +28,13 @@ export interface AuthPrincipal {
   businessId?: string | undefined;
 }
 
-/** A request that has passed `JwtAuthGuard`. */
+/**
+ * A request that has passed the guards.
+ *
+ * Loosely coupled to `access.decorators.ts` on purpose: the type of `membership` is declared there
+ * beside the decorator that consumes it, so the two cannot drift.
+ */
 export interface RequestWithAuth extends Request {
   auth?: AuthPrincipal;
+  membership?: TenantMembership;
 }
