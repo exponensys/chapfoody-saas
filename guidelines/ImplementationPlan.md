@@ -754,7 +754,7 @@ change without a migration is forbidden by review.
 
 ### M3 — Authentication, MFA, tenant and entitlement guards `[~]`
 
-**Progress** — five slices done, all tested.
+**Progress** — six slices done, all tested.
 
 *Configuration* (35 tests, now 53 including the blocks that were missing — see the note at the end).
 Signing secrets, token lifetimes, cookie policy, lockout policy, MFA issuer, the MFA secret-box key and
@@ -809,6 +809,31 @@ they are ten working bypasses of the second factor. Codes are validated by walki
 the code pinned per step, which yields the matched step and with it the **replay check** — a spent code is
 refused inside its own window, which a plain "is this valid now" answer cannot do.
 
+*Google OAuth* (22 tests across the provider and the state cookie, plus 8 at the linking rules) — the ID
+token is **verified against Google's keys with the audience pinned to our own client id**, never merely
+decoded: it arrives from the browser, so it is attacker-controlled until proven otherwise, and a decoded
+payload would accept a token minted for any other application. Identity resolves in `sub` order and only
+then by e-mail, because an address can be renamed inside a Google account and a Workspace admin can
+reassign one.
+
+Linking is where the security lives. "Sign in with Google" on an address that already has an account is
+**auto-linked only if that account has verified its e-mail**; if it has not, the sign-in is refused with an
+actionable message instead. That closes the pre-registration attack, where somebody signs up with the
+victim's address and a password they know and waits for the real owner to merge the two — after which the
+attacker's password opens the victim's account. A brand-new address creates an account with no password
+and no business membership, so "Continue with Google" works on first sight and the result can do nothing
+until it is invited or starts a business.
+
+Three things had to be got right for this to be worth having. **The second factor is not skipped**: an
+MFA account gets the same challenge from Google as from a password, because otherwise "Sign in with
+Google" is a documented bypass of the only feature that protects the account. **Nothing sensitive travels
+in the URL**: the refresh token goes into its `httpOnly` cookie and an MFA challenge into a cookie of its
+own, so the redirect carries a status word and nothing else — no credential in browser history, session
+restore, or a `Referer` header. And the **state cookie is `lax` rather than the configured value**, because
+the callback is a cross-site top-level navigation from `accounts.google.com`: a `Strict` state cookie would
+be missing at the callback and every Google sign-in would fail with a "state mismatch" that looks exactly
+like an attack.
+
 **Findings worth recording** — `@nestjs/jwt@12` is ESM-only and this repository's Jest runs CommonJS, so it
 failed to import outright; pinned to v11, which is CJS and pairs with NestJS 11. `otplib@13` fails the same
 way for a subtler reason: its `main` is CJS, but a transitive plugin resolves to TypeScript source under
@@ -826,10 +851,10 @@ cookie-policy, lockout and MFA assertions had been drafted and then never writte
 updating the file for the MFA key, not by a failing test — worth noting, because nothing in the suite
 could have caught an assertion that was never made.
 
-**Still to do in M3** — Google OAuth with account linking, throttling (`@nestjs/throttler`), the audit
-interceptor, the email service through BullMQ, the session-listing endpoints, and step-up verification for
-sensitive endpoints (the challenge mechanism exists and is reused for `mfa/disable`, which already demands
-a current code).
+**Still to do in M3** — throttling (`@nestjs/throttler`), the audit interceptor, the email service through
+BullMQ, the session-listing endpoints, registration with the password policy and breached-password check,
+and step-up verification for sensitive endpoints (the challenge mechanism exists and is reused for
+`mfa/disable`, which already demands a current code).
 
 **Maps to**: A.V (auth mechanics), B (premium check plumbing), G (security first). **Depends on**: M2.
 
@@ -842,6 +867,10 @@ a current code).
    breached-password check are not written yet, so this task is not closed.
 2. **Google OAuth** through `/auth/callback` with `Account` linking; account-linking and email-collision rules
    documented.
+   `[x]` Done, and the collision rule is the part that matters: an existing account is linked only when it
+   has verified its e-mail, which closes the pre-registration attack. The callback redirects to
+   `{CORS_ORIGINS[0]}/auth/callback?status=…` and never carries a credential in the URL. Endpoints are
+   `/v1/auth/google` and `/v1/auth/google/callback`; the second factor still applies.
 3. JWT access token (short TTL) + **httpOnly rotating refresh** cookie; refresh reuse detection revokes the token
    family.
 4. **MFA TOTP** (`otplib`) with QR provisioning and 10 single-use recovery codes; step-up verification for sensitive
