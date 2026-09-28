@@ -23,6 +23,7 @@
     "db:down": "docker compose down",
     "db:seed": "pnpm --filter @chapfoody/api db:seed",
     "db:reset": "pnpm --filter @chapfoody/api db:reset",
+    "db:erd": "pnpm --filter @chapfoody/api db:erd",
     "hooks:install": "git config core.hooksPath .githooks"
   },
   "devDependencies": {

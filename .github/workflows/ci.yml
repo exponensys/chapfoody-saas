@@ -68,6 +68,13 @@ jobs:
       - name: Test with coverage
         run: pnpm test:coverage
 
+      # The ERD is generated from prisma/models/*.prisma and committed, so this fails when
+      # someone changes the schema without regenerating the diagrams. Cheap — it is a
+      # text comparison, no browser, no rendering — which is what makes it worth enforcing
+      # rather than merely documenting.
+      - name: Check the ERD is current
+        run: pnpm --filter @chapfoody/api db:erd:check
+
       - name: Build
         run: pnpm build
 

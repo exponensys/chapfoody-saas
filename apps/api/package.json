@@ -22,6 +22,8 @@
     "db:validate": "prisma validate",
     "db:seed": "prisma db seed",
     "db:reset": "node scripts/db-reset.mjs",
+    "db:erd": "node scripts/generate-erd.mjs",
+    "db:erd:check": "node scripts/generate-erd.mjs --check",
     "prebuild": "prisma generate",
     "pretypecheck": "prisma generate",
     "pretest": "prisma generate",
